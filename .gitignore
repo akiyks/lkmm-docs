@@ -4,3 +4,7 @@
 *.out
 *.pdf
 *.toc
+*.fdb_latexmk
+*.fls
+*.ilg
+*.ind
