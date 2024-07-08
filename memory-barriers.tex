@@ -1,0 +1,3420 @@
+\chapter{Linux Kermel Memory Barriers}
+
+\section{Authors}
+
+\begin{itemize}
+  \item David Howells <dhowells@redhat.com>
+  \item Paul E. McKenney <paulmck@kernel.org>
+  \item Will Deacon <will.deacon@arm.com>
+  \item Peter Zijlstra <peterz@infradead.org>
+\end{itemize}
+
+\section{Disclaimer}
+
+This document is not a specification; it is intentionally (for the sake of
+brevity) and unintentionally (due to being human) incomplete.
+This document is meant as a guide to using the various memory barriers
+provided by Linux, but in case of any doubt (and there are many) please ask.
+Some doubts may be resolved by referring to the formal memory consistency
+model and related documentation at \path{tools/memory-model/}.
+Nevertheless, even this memory model should be viewed as the collective
+opinion of its maintainers rather than as an infallible oracle.
+
+To repeat, this document is not a specification of what Linux expects from
+hardware.
+
+The purpose of this document is twofold:
+
+\begin{enumerate}
+  \item to specify the minimum functionality that one can rely on for any
+        particular barrier, and
+  \item to provide a guide as to how to use the barriers that are available.
+\end{enumerate}
+
+Note that an architecture can provide more than the minimum requirement
+for any particular barrier, but if the architecture provides less than
+that, that architecture is incorrect.
+
+Note also that it is possible that a barrier may be a no-op for an
+architecture because the way that arch works renders an explicit barrier
+unnecessary in that case.
+
+
+\section{Abstract memory access model}
+
+Consider the following abstract model of the system:
+
+\begin{VerbatimU}
+		            :                :
+		            :                :
+		            :                :
+		+-------+   :   +--------+   :   +-------+
+		|       |   :   |        |   :   |       |
+		|       |   :   |        |   :   |       |
+		| CPU 1 |<----->| Memory |<----->| CPU 2 |
+		|       |   :   |        |   :   |       |
+		|       |   :   |        |   :   |       |
+		+-------+   :   +--------+   :   +-------+
+		    ^       :       ^        :       ^
+		    |       :       |        :       |
+		    |       :       |        :       |
+		    |       :       v        :       |
+		    |       :   +--------+   :       |
+		    |       :   |        |   :       |
+		    |       :   |        |   :       |
+		    +---------->| Device |<----------+
+		            :   |        |   :
+		            :   |        |   :
+		            :   +--------+   :
+		            :                :
+\end{VerbatimU}
+
+Each CPU executes a program that generates memory access operations.
+In the abstract CPU, memory operation ordering is very relaxed, and a CPU may
+actually perform the memory operations in any order it likes, provided
+program causality appears to be maintained.
+Similarly, the compiler may also arrange the instructions it emits in any
+order it likes, provided it doesn't affect the apparent operation of the
+program.
+
+So in the above diagram, the effects of the memory operations performed by a
+CPU are perceived by the rest of the system as the operations cross the
+interface between the CPU and rest of the system (the dotted lines).
+
+
+For example, consider the following sequence of events:
+
+\begin{VerbatimU}
+	CPU 1           CPU 2
+	===============	===============
+	{ A == 1; B == 2 }
+	A = 3;          x = B;
+	B = 4;          y = A;
+\end{VerbatimU}
+
+The set of accesses as seen by the memory system in the middle can be arranged
+in 24 different combinations:
+
+\begin{VerbatimU}
+	STORE A=3, STORE B=4,   y=LOAD A->3, x=LOAD B->4
+	STORE A=3, STORE B=4,   x=LOAD B->4, y=LOAD A->3
+	STORE A=3, y=LOAD A->3, STORE B=4,   x=LOAD B->4
+	STORE A=3, y=LOAD A->3, x=LOAD B->2, STORE B=4
+	STORE A=3, x=LOAD B->2, STORE B=4,   y=LOAD A->3
+	STORE A=3, x=LOAD B->2, y=LOAD A->3, STORE B=4
+	STORE B=4, STORE A=3,   y=LOAD A->3, x=LOAD B->4
+	STORE B=4, ...
+	...
+\end{VerbatimU}
+
+and can thus result in four different combinations of values:
+
+\begin{VerbatimU}
+	x == 2, y == 1
+	x == 2, y == 3
+	x == 4, y == 1
+	x == 4, y == 3
+\end{VerbatimU}
+
+Furthermore, the stores committed by a CPU to the memory system may not be
+perceived by the loads made by another CPU in the same order as the stores were
+committed.
+
+
+As a further example, consider this sequence of events:
+
+\begin{VerbatimU}
+	CPU 1		CPU 2
+	===============	===============
+	{ A == 1, B == 2, C == 3, P == &A, Q == &C }
+	B = 4;          Q = P;
+	P = &B;         D = *Q;
+\end{VerbatimU}
+
+There is an obvious address dependency here, as the value loaded into~D depends
+on the address retrieved from~P by CPU~2.
+At the end of the sequence, any of the following results are possible:
+
+\begin{VerbatimU}
+	(Q == &A) and (D == 1)
+	(Q == &B) and (D == 2)
+	(Q == &B) and (D == 4)
+\end{VerbatimU}
+
+Note that CPU~2 will never try and load~C into~D because the CPU will load~P
+into~Q before issuing the load of~\co{*Q}.
+
+
+\subsection{Device operations}
+
+Some devices present their control interfaces as collections of memory
+locations, but the order in which the control registers are accessed is very
+important.
+For instance, imagine an ethernet card with a set of internal registers
+that are accessed through an address port register~(A) and a data port
+register~(D).
+To read internal register~5, the following code might then be used:
+
+\begin{VerbatimU}
+	*A = 5;
+	x = *D;
+\end{VerbatimU}
+
+but this might show up as either of the following two sequences:
+
+\begin{VerbatimU}
+	STORE *A = 5, x = LOAD *D
+	x = LOAD *D, STORE *A = 5
+\end{VerbatimU}
+
+the second of which will almost certainly result in a malfunction, since it set
+the address \emph{after} attempting to read the register.
+
+
+\subsection{Guarantees}
+
+There are some minimal guarantees that may be expected of a CPU:
+
+\begin{itemize}
+ \item On any given CPU, dependent memory accesses will be issued in order, with
+       respect to itself.
+       This means that for:
+       \begin{VerbatimU}
+	Q = READ_ONCE(P); D = READ_ONCE(*Q);
+       \end{VerbatimU}
+
+       the CPU will issue the following memory operations:
+
+       \begin{VerbatimU}
+	Q = LOAD P, D = LOAD *Q
+       \end{VerbatimU}
+
+       and always in that order.
+       However, on DEC Alpha, \co{READ_ONCE()} also
+       emits a memory-barrier instruction, so that a DEC Alpha CPU will
+       instead issue the following memory operations (\co{<MB>} stands for
+       a memory-barrier instruction):
+
+       \begin{VerbatimU}
+	Q = LOAD P, <MB>, D = LOAD *Q, <MB>
+       \end{VerbatimU}
+
+       Whether on DEC Alpha or not, the \co{READ_ONCE()} also prevents compiler
+       mischief.
+
+ \item Overlapping loads and stores within a particular CPU will appear to be
+       ordered within that CPU.  This means that for:
+
+       \begin{VerbatimU}
+	a = READ_ONCE(*X); WRITE_ONCE(*X, b);
+       \end{VerbatimU}
+
+       the CPU will only issue the following sequence of memory operations:
+
+       \begin{VerbatimU}
+	a = LOAD *X, STORE *X = b
+       \end{VerbatimU}
+
+       And for:
+
+       \begin{VerbatimU}
+	WRITE_ONCE(*X, c); d = READ_ONCE(*X);
+       \end{VerbatimU}
+
+       the CPU will only issue:
+
+       \begin{VerbatimU}
+	STORE *X = c, d = LOAD *X
+       \end{VerbatimU}
+
+       (Loads and stores overlap if they are targeted at overlapping pieces of
+       memory).
+\end{itemize}
+
+And there are a number of things that \emph{must} or \emph{must not} be assumed:
+
+\begin{itemize}
+ \item It \emph{must not} be assumed that the compiler will do what you want
+       with memory references that are not protected by \co{READ_ONCE()} and
+       \co{WRITE_ONCE()}.
+       Without them, the compiler is within its rights to do all sorts of
+       "creative" transformations, which are covered in the COMPILER BARRIER
+       section.
+
+ \item It \emph{must not} be assumed that independent loads and stores will be issued
+       in the order given.  This means that for:
+
+       \begin{VerbatimU}
+	X = *A; Y = *B; *D = Z;
+       \end{VerbatimU}
+
+       we may get any of the following sequences:
+
+       \begin{VerbatimU}
+	X = LOAD *A,  Y = LOAD *B,  STORE *D = Z
+	X = LOAD *A,  STORE *D = Z, Y = LOAD *B
+	Y = LOAD *B,  X = LOAD *A,  STORE *D = Z
+	Y = LOAD *B,  STORE *D = Z, X = LOAD *A
+	STORE *D = Z, X = LOAD *A,  Y = LOAD *B
+	STORE *D = Z, Y = LOAD *B,  X = LOAD *A
+       \end{VerbatimU}
+
+ \item It \emph{must} be assumed that overlapping memory accesses may be
+       merged or discarded.
+       This means that for:
+
+       \begin{VerbatimU}
+	X = *A; Y = *(A + 4);
+       \end{VerbatimU}
+
+       we may get any one of the following sequences:
+
+       \begin{VerbatimU}
+	X = LOAD *A; Y = LOAD *(A + 4);
+	Y = LOAD *(A + 4); X = LOAD *A;
+	{X, Y} = LOAD {*A, *(A + 4) };
+       \end{VerbatimU}
+
+       And for:
+
+       \begin{VerbatimU}
+	*A = X; *(A + 4) = Y;
+       \end{VerbatimU}
+
+       we may get any of:
+
+       \begin{VerbatimU}
+	STORE *A = X; STORE *(A + 4) = Y;
+	STORE *(A + 4) = Y; STORE *A = X;
+	STORE {*A, *(A + 4) } = {X, Y};
+       \end{VerbatimU}
+\end{itemize}
+
+And there are anti-guarantees:
+
+\begin{itemize}
+ \item These guarantees do not apply to bitfields, because compilers often
+       generate code to modify these using non-atomic read-modify-write
+       sequences.
+       Do not attempt to use bitfields to synchronize parallel algorithms.
+
+ \item Even in cases where bitfields are protected by locks, all fields
+       in a given bitfield must be protected by one lock.
+       If two fields in a given bitfield are protected by different locks,
+       the compiler's non-atomic read-modify-write sequences can cause
+       an update to one field to corrupt the value of an adjacent field.
+
+ \item These guarantees apply only to properly aligned and sized scalar
+       variables.
+       "Properly sized" currently means variables that are the same size
+       as "char", "short", "int" and "long".
+       "Properly aligned" means the natural alignment, thus no
+       constraints for "char", two-byte alignment for "short",
+       four-byte alignment for "int", and either four-byte or eight-byte
+       alignment for "long", on 32-bit and 64-bit systems, respectively.
+       Note that these guarantees were introduced into the C11 standard,
+       so beware when using older pre-C11 compilers (for example, gcc 4.6).
+       The portion of the standard containing this guarantee is
+       Section 3.14, which defines "memory location" as follows:
+
+       \begin{description}
+     	\item [location] \hfill
+		either an object of scalar type, or a maximal sequence
+		of adjacent bit-fields all having nonzero width
+
+		NOTE 1: Two threads of execution can update and access
+		separate memory locations without interfering with
+		each other.
+
+		NOTE 2: A bit-field and an adjacent non-bit-field member
+		are in separate memory locations. The same applies
+		to two bit-fields, if one is declared inside a nested
+		structure declaration and the other is not, or if the two
+		are separated by a zero-length bit-field declaration,
+		or if they are separated by a non-bit-field member
+		declaration. It is not safe to concurrently update two
+		bit-fields in the same structure if all members declared
+		between them are also bit-fields, no matter what the
+		sizes of those intervening bit-fields happen to be.
+       \end{description}
+\end{itemize}
+
+\section{What are memory barriers?}
+
+As can be seen above, independent memory operations are effectively performed
+in random order, but this can be a problem for CPU-CPU interaction and for
+I/O\@.
+What is required is some way of intervening to instruct the compiler and the
+CPU to restrict the order.
+
+Memory barriers are such interventions.
+They impose a perceived partial ordering over the memory operations on
+either side of the barrier.
+
+Such enforcement is important because the CPUs and other devices in a system
+can use a variety of tricks to improve performance, including reordering,
+deferral and combination of memory operations; speculative loads; speculative
+branch prediction and various types of caching.
+Memory barriers are used to override or suppress these tricks, allowing
+the code to sanely control the interaction of multiple CPUs and/or devices.
+
+\subsection{Varieties of memory barrier}
+
+Memory barriers come in four basic varieties:
+
+\begin{enumerate}
+ \item
+     Write (or store) memory barriers.
+
+     A write memory barrier gives a guarantee that all the STORE operations
+     specified before the barrier will appear to happen before all the STORE
+     operations specified after the barrier with respect to the other
+     components of the system.
+
+     A write barrier is a partial ordering on stores only; it is not required
+     to have any effect on loads.
+
+     A CPU can be viewed as committing a sequence of store operations to the
+     memory system as time progresses.
+     All stores \emph{before} a write barrier will occur \emph{before} all
+     the stores after the write barrier.
+
+     [!] Note that write barriers should normally be paired with read or
+     address-dependency barriers; see the "SMP barrier pairing" subsection.
+
+
+ \item
+     Address-dependency barriers (HISTORICAL).
+
+     [!] This section is marked as HISTORICAL\@:
+     It covers the long-obsolete \co{smp_read_barrier_depends()} macro,
+     the semantics of which are now implicit in all marked accesses.
+     For more up-to-date information, including how compiler transformations
+     can sometimes break address dependencies, see
+     \path{Documentation/RCU/rcu_dereference.rst}.
+
+     An address-dependency barrier is a weaker form of read barrier.
+     In the case where two loads are performed such that the second depends
+     on the result of the first (eg., the first load retrieves the address
+     to which the second load will be directed), an address-dependency
+     barrier would be required to make sure that the target of the second
+     load is updated after the address obtained by the first load is
+     accessed.
+
+     An address-dependency barrier is a partial ordering on interdependent
+     loads only; it is not required to have any effect on stores, independent
+     loads or overlapping loads.
+
+     As mentioned in (1), the other CPUs in the system can be viewed as
+     committing sequences of stores to the memory system that the CPU being
+     considered can then perceive.
+     An address-dependency barrier issued by the CPU under consideration
+     guarantees that for any load preceding it, if that load touches one of
+     a sequence of stores from another CPU, then by the time the barrier
+     completes, the effects of all the stores prior to that touched by the
+     load will be perceptible to any loads issued after the
+     address-dependency barrier.
+
+     See the "Examples of memory barrier sequences" subsection for diagrams
+     showing the ordering constraints.
+
+     [!] Note that the first load really has to have an \emph{address}
+     dependency and not a control dependency.
+     If the address for the second load is dependent on the first load,
+     but the dependency is through a conditional rather than actually
+     loading the address itself, then it's a \emph{control} dependency and
+     a full read barrier or better is required.
+     See the "Control dependencies" subsection for more information.
+
+     [!] Note that address-dependency barriers should normally be paired with
+     write barriers; see the "SMP barrier pairing" subsection.
+
+     [!] Kernel release v5.9 removed kernel APIs for explicit
+     address-dependency barriers.
+     Nowadays, APIs for marking loads from shared variables such as
+     \co{READ_ONCE()} and \co{rcu_dereference()} provide implicit
+     address-dependency barriers.
+
+ \item
+     Read (or load) memory barriers.
+
+     A read barrier is an address-dependency barrier plus a guarantee that all
+     the LOAD operations specified before the barrier will appear to happen
+     before all the LOAD operations specified after the barrier with respect to
+     the other components of the system.
+
+     A read barrier is a partial ordering on loads only; it is not required to
+     have any effect on stores.
+
+     Read memory barriers imply address-dependency barriers, and so can
+     substitute for them.
+
+     [!] Note that read barriers should normally be paired with write barriers;
+     see the "SMP barrier pairing" subsection.
+
+
+ \item
+     General memory barriers.
+
+     A general memory barrier gives a guarantee that all the LOAD and STORE
+     operations specified before the barrier will appear to happen before all
+     the LOAD and STORE operations specified after the barrier with respect to
+     the other components of the system.
+
+     A general memory barrier is a partial ordering over both loads and stores.
+
+     General memory barriers imply both read and write memory barriers, and so
+     can substitute for either.
+\end{enumerate}
+
+And a couple of implicit varieties:
+
+\begin{enumerate}
+ \item
+     ACQUIRE operations.
+
+     This acts as a one-way permeable barrier.
+     It guarantees that all memory operations after the ACQUIRE operation
+     will appear to happen after the ACQUIRE operation with respect to the
+     other components of the system.
+     ACQUIRE operations include LOCK operations and both \co{smp_load_acquire()}
+     and \co{smp_cond_load_acquire()} operations.
+
+     Memory operations that occur before an ACQUIRE operation may appear to
+     happen after it completes.
+
+     An ACQUIRE operation should almost always be paired with a RELEASE
+     operation.
+
+
+ \item
+     RELEASE operations.
+
+     This also acts as a one-way permeable barrier.
+     It guarantees that all memory operations before the RELEASE operation
+     will appear to happen before the RELEASE operation with respect to
+     the other components of the system.
+     RELEASE operations include UNLOCK operations and \co{smp_store_release()}
+     operations.
+
+     Memory operations that occur after a RELEASE operation may appear to
+     happen before it completes.
+
+     The use of ACQUIRE and RELEASE operations generally precludes the need
+     for other sorts of memory barrier.
+     In addition, a RELEASE+ACQUIRE pair is \emph{not} guaranteed to act
+     as a full memory barrier.
+     However, after an ACQUIRE on a given variable, all memory accesses
+     preceding any prior RELEASE on that same variable are guaranteed to
+     be visible.
+     In other words, within a given variable's critical section, all
+     accesses of all previous critical sections for that variable are
+     guaranteed to have completed.
+
+     This means that ACQUIRE acts as a minimal "acquire" operation and
+     RELEASE acts as a minimal "release" operation.
+\end{enumerate}
+
+A subset of the atomic operations described in \path{atomic_t.txt} have
+ACQUIRE and RELEASE variants in addition to fully-ordered and relaxed
+(no barrier semantics) definitions.
+For compound atomics performing both a load and a store, ACQUIRE semantics
+apply only to the load and RELEASE semantics apply only to the store portion
+of the operation.
+
+Memory barriers are only required where there's a possibility of interaction
+between two CPUs or between a CPU and a device.
+If it can be guaranteed that there won't be any such interaction in any
+particular piece of code, then memory barriers are unnecessary in that
+piece of code.
+
+
+Note that these are the \emph{minimum} guarantees.
+Different architectures may give more substantial guarantees, but they
+may \emph{not} be relied upon outside of arch specific code.
+
+
+\subsection{What may not be asssumed about memory barriers?}
+
+There are certain things that the Linux kernel memory barriers do not guarantee:
+
+\begin{itemize}
+ \item
+     There is no guarantee that any of the memory accesses specified before a
+     memory barrier will be \emph{complete} by the completion of a memory
+     barrier instruction; the barrier can be considered to draw a line in
+     that CPU's access queue that accesses of the appropriate type may not
+     cross.
+
+ \item
+     There is no guarantee that issuing a memory barrier on one CPU will have
+     any direct effect on another CPU or any other hardware in the system.
+     The indirect effect will be the order in which the second CPU sees the
+     effects of the first CPU's accesses occur, but see the next point:
+
+ \item
+     There is no guarantee that a CPU will see the correct order of effects
+     from a second CPU's accesses, even \emph{if} the second CPU uses a memory
+     barrier, unless the first CPU \emph{also} uses a matching memory barrier
+     (see the subsection on "SMP Barrier Pairing").
+
+ \item
+     There is no guarantee that some intervening piece of off-the-CPU
+     hardware\footnote{
+	For information on bus mastering DMA and coherency please read:
+	\path{Documentation/driver-api/pci/pci.rst},
+	\path{Documentation/core-api/dma-api-howto.rst}, and
+	\path{Documentation/core-api/dma-api.rst}.}
+     will not reorder the memory accesses.
+     CPU cache coherency mechanisms should propagate the indirect effects
+     of a memory barrier between CPUs, but might not do so in order.
+\end{itemize}
+
+\subsection{Address-dependency barriers (HISTORICAL)}
+
+[!] This section is marked as HISTORICAL\@:
+It covers the long-obsolete \co{smp_read_barrier_depends()} macro, the
+semantics of which are now implicit in all marked accesses.
+For more up-to-date information, including how compiler transformations
+can sometimes break address dependencies, see
+\path{Documentation/RCU/rcu_dereference.rst}.
+
+As of v4.15 of the Linux kernel, an \co{smp_mb()} was added to
+\co{READ_ONCE()} for DEC Alpha, which means that about the only people who
+need to pay attention to this section are those working on DEC Alpha
+architecture-specific code and those working on \co{READ_ONCE()} itself.
+For those who need it, and for those who are interested in the history,
+here is the story of address-dependency barriers.
+
+[!] While address dependencies are observed in both load-to-load and
+load-to-store relations, address-dependency barriers are not necessary
+for load-to-store situations.
+
+The requirement of address-dependency barriers is a little subtle, and
+it's not always obvious that they're needed.
+To illustrate, consider the following sequence of events:
+
+\begin{VerbatimU}
+	CPU 1                 CPU 2
+	===============	      ===============
+	{ A == 1, B == 2, C == 3, P == &A, Q == &C }
+	B = 4;
+	<write barrier>
+	WRITE_ONCE(P, &B);
+	                      Q = READ_ONCE_OLD(P);
+	                      D = *Q;
+\end{VerbatimU}
+
+[!] \co{READ_ONCE_OLD()} corresponds to \co{READ_ONCE()} of
+pre-4.15 kernel, which doesn't imply an address-dependency barrier.
+
+There's a clear address dependency here, and it would seem that by the end of
+the sequence, \co{Q} must be either~\co{&A} or~\co{&B}, and that:
+
+\begin{VerbatimU}
+	(Q == &A) implies (D == 1)
+	(Q == &B) implies (D == 4)
+\end{VerbatimU}
+
+But!
+CPU~2's perception of P may be updated \emph{before} its perception of~B,
+thus leading to the following situation:
+
+\begin{VerbatimU}
+	(Q == &B) and (D == 2) ????
+\end{VerbatimU}
+
+While this may seem like a failure of coherency or causality maintenance, it
+isn't, and this behaviour can be observed on certain real CPUs (such as the DEC
+Alpha).
+
+To deal with this, \co{READ_ONCE()} provides an implicit address-dependency
+barrier since kernel release v4.15
+(AD stands for "address-dependency"):
+
+\begin{VerbatimU}
+	CPU 1                 CPU 2
+	===============	      ===============
+	{ A == 1, B == 2, C == 3, P == &A, Q == &C }
+	B = 4;
+	<write barrier>
+	WRITE_ONCE(P, &B);
+	                      Q = READ_ONCE(P);
+	                      <implicit AD barrier>
+	                      D = *Q;
+\end{VerbatimU}
+
+This enforces the occurrence of one of the two implications, and prevents the
+third possibility from arising.
+
+
+[!] Note that this extremely counterintuitive situation arises most easily on
+machines with split caches, so that, for example, one cache bank processes
+even-numbered cache lines and the other bank processes odd-numbered cache
+lines.
+The pointer P might be stored in an odd-numbered cache line, and the
+variable B might be stored in an even-numbered cache line.
+Then, if the even-numbered bank of the reading CPU's cache is extremely
+busy while the odd-numbered bank is idle, one can see the new value of
+the pointer~P (\co{&B}), but the old value of the variable~B (2).
+
+
+An address-dependency barrier is not required to order dependent writes
+because the CPUs that the Linux kernel supports don't do writes until they
+are certain (1) that the write will actually happen, (2) of the location of
+the write, and (3) of the value to be written.
+But please carefully read the "CONTROL DEPENDENCIES" section and the
+\path{Documentation/RCU/rcu_dereference.rst} file:
+The compiler can and does break dependencies in a great many highly
+creative ways.
+
+\begin{VerbatimU}
+	CPU 1                 CPU 2
+	===============	      ===============
+	{ A == 1, B == 2, C = 3, P == &A, Q == &C }
+	B = 4;
+	<write barrier>
+	WRITE_ONCE(P, &B);
+	                      Q = READ_ONCE_OLD(P);
+	                      WRITE_ONCE(*Q, 5);
+\end{VerbatimU}
+
+Therefore, no address-dependency barrier is required to order the read into
+Q with the store into *Q.  In other words, this outcome is prohibited,
+even without an implicit address-dependency barrier of modern \co{READ_ONCE()}:
+
+\begin{VerbatimU}
+	(Q == &B) && (B == 4)
+\end{VerbatimU}
+
+Please note that this pattern should be rare.
+After all, the whole point of dependency ordering is to \emph{prevent}
+writes to the data structure, along with the expensive cache misses
+associated with those writes.
+This pattern can be used to record rare error conditions and the like,
+and the CPUs' naturally occurring ordering prevents such records from
+being lost.
+
+
+Note well that the ordering provided by an address dependency is local to
+the CPU containing it.
+See the section on "Multicopy atomicity" for more information.
+
+
+The address-dependency barrier is very important to the RCU system,
+for example.
+See \co{rcu_assign_pointer()} and \co{rcu_dereference()} in
+\path{include/linux/rcupdate.h}.
+This permits the current target of an RCU'd pointer to be replaced with
+a new modified target, without the replacement target appearing to be
+incompletely initialised.
+
+
+\subsection{Control dependencies}
+
+Control dependencies can be a bit tricky because current compilers do
+not understand them.
+The purpose of this section is to help you prevent the compiler's ignorance
+from breaking your code.
+
+A load-load control dependency requires a full read memory barrier, not
+simply an (implicit) address-dependency barrier to make it work correctly.
+Consider the following bit of code:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	<implicit address-dependency barrier>
+	if (q) {
+		/* BUG: No address dependency!!! */
+		p = READ_ONCE(b);
+	}
+\end{VerbatimU}
+
+This will not have the desired effect because there is no actual address
+dependency, but rather a control dependency that the CPU may short-circuit
+by attempting to predict the outcome in advance, so that other CPUs see
+the load from~b as having happened before the load from~a.
+In such a case what's actually required is:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q) {
+		<read barrier>
+		p = READ_ONCE(b);
+	}
+\end{VerbatimU}
+
+However, stores are not speculated.
+This means that ordering -is- provided for load-store control
+dependencies, as in the following example:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q) {
+		WRITE_ONCE(b, 1);
+	}
+\end{VerbatimU}
+
+Control dependencies pair normally with other types of barriers.
+That said, please note that neither \co{READ_ONCE()} nor \co{WRITE_ONCE()}
+are optional!
+Without the \co{READ_ONCE()}, the compiler might combine the
+load from~'a' with other loads from~'a'.  Without the \co{WRITE_ONCE()},
+the compiler might combine the store to~'b' with other stores to~'b'.
+Either can result in highly counterintuitive effects on ordering.
+
+Worse yet, if the compiler is able to prove (say) that the value of
+variable~'a' is always non-zero, it would be well within its rights
+to optimize the original example by eliminating the "if" statement
+as follows:
+
+\begin{VerbatimU}
+	q = a;
+	b = 1;  /* BUG: Compiler and CPU can both reorder!!! */
+\end{VerbatimU}
+
+So don't leave out the \co{READ_ONCE()}.
+
+It is tempting to try to enforce ordering on identical stores on both
+branches of the "if" statement as follows:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q) {
+		barrier();
+		WRITE_ONCE(b, 1);
+		do_something();
+	} else {
+		barrier();
+		WRITE_ONCE(b, 1);
+		do_something_else();
+	}
+\end{VerbatimU}
+
+Unfortunately, current compilers will transform this as follows at high
+optimization levels:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	barrier();
+	WRITE_ONCE(b, 1);  /* BUG: No ordering vs. load from a!!! */
+	if (q) {
+		/* WRITE_ONCE(b, 1); -- moved up, BUG!!! */
+		do_something();
+	} else {
+		/* WRITE_ONCE(b, 1); -- moved up, BUG!!! */
+		do_something_else();
+	}
+\end{VerbatimU}
+
+Now there is no conditional between the load from~'a' and the store
+to~'b', which means that the CPU is within its rights to reorder them:
+The conditional is absolutely required, and must be present in the
+assembly code even after all compiler optimizations have been applied.
+Therefore, if you need ordering in this example, you need explicit
+memory barriers, for example, \co{smp_store_release()}:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q) {
+		smp_store_release(&b, 1);
+		do_something();
+	} else {
+		smp_store_release(&b, 1);
+		do_something_else();
+	}
+\end{VerbatimU}
+
+In contrast, without explicit memory barriers, two-legged-if control
+ordering is guaranteed only when the stores differ, for example:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q) {
+		WRITE_ONCE(b, 1);
+		do_something();
+	} else {
+		WRITE_ONCE(b, 2);
+		do_something_else();
+	}
+\end{VerbatimU}
+
+The initial \co{READ_ONCE()} is still required to prevent the compiler from
+proving the value of~'a'.
+
+In addition, you need to be careful what you do with the local variable~'q',
+otherwise the compiler might be able to guess the value and again remove
+the needed conditional.  For example:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q % MAX) {
+		WRITE_ONCE(b, 1);
+		do_something();
+	} else {
+		WRITE_ONCE(b, 2);
+		do_something_else();
+	}
+\end{VerbatimU}
+
+If MAX is defined to be 1, then the compiler knows that \co{(q \% MAX)} is
+equal to zero, in which case the compiler is within its rights to
+transform the above code into the following:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	WRITE_ONCE(b, 2);
+	do_something_else();
+\end{VerbatimU}
+
+Given this transformation, the CPU is not required to respect the ordering
+between the load from variable~'a' and the store to variable~'b'.
+It is tempting to add a \co{barrier()}, but this does not help.
+The conditional is gone, and the barrier won't bring it back.
+Therefore, if you are relying on this ordering, you should make sure that
+MAX is greater than one, perhaps as follows:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	BUILD_BUG_ON(MAX <= 1); /* Order load from a with store to b. */
+	if (q % MAX) {
+		WRITE_ONCE(b, 1);
+		do_something();
+	} else {
+		WRITE_ONCE(b, 2);
+		do_something_else();
+	}
+\end{VerbatimU}
+
+Please note once again that the stores to~'b' differ.
+If they were identical, as noted earlier, the compiler could pull this
+store outside of the 'if' statement.
+
+You must also be careful not to rely too much on boolean short-circuit
+evaluation.
+Consider this example:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q || 1 > 0)
+		WRITE_ONCE(b, 1);
+\end{VerbatimU}
+
+Because the first condition cannot fault and the second condition is
+always true, the compiler can transform this example as following,
+defeating control dependency:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	WRITE_ONCE(b, 1);
+\end{VerbatimU}
+
+This example underscores the need to ensure that the compiler cannot
+out-guess your code.  More generally, although \co{READ_ONCE()} does force
+the compiler to actually emit code for a given load, it does not force
+the compiler to use the results.
+
+In addition, control dependencies apply only to the then-clause and
+else-clause of the if-statement in question.
+In particular, it does not necessarily apply to code following the
+if-statement:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q) {
+		WRITE_ONCE(b, 1);
+	} else {
+		WRITE_ONCE(b, 2);
+	}
+	WRITE_ONCE(c, 1);  /* BUG: No ordering against the read from 'a'. */
+\end{VerbatimU}
+
+It is tempting to argue that there in fact is ordering because the
+compiler cannot reorder volatile accesses and also cannot reorder
+the writes to~'b' with the condition.
+Unfortunately for this line of reasoning, the compiler might compile
+the two writes to~'b' as conditional-move instructions, as in this
+fanciful pseudo-assembly language:
+
+\begin{VerbatimU}
+	ld r1,a
+	cmp r1,$0
+	cmov,ne r4,$1
+	cmov,eq r4,$2
+	st r4,b
+	st $1,c
+\end{VerbatimU}
+
+A weakly ordered CPU would have no dependency of any sort between the load
+from~'a' and the store to~'c'.
+The control dependencies would extend only to the pair of cmov
+instructions and the store depending on them.
+In short, control dependencies apply only to the stores in the then-clause
+and else-clause of the if-statement in question (including functions
+invoked by those two clauses), not to code following that if-statement.
+
+
+Note well that the ordering provided by a control dependency is local
+to the CPU containing it.
+See the section on "Multicopy atomicity" for more information.
+
+
+In summary:
+
+\begin{itemize}
+ \item
+      Control dependencies can order prior loads against later stores.
+      However, they do \emph{not} guarantee any other sort of ordering:
+      Not prior loads against later loads, nor prior stores against
+      later anything.
+      If you need these other forms of ordering, use \co{smp_rmb()},
+      \co{smp_wmb()}, or, in the case of prior stores and later loads,
+      \co{smp_mb()}.
+
+ \item
+      If both legs of the "if" statement begin with identical stores to
+      the same variable, then those stores must be ordered, either by
+      preceding both of them with \co{smp_mb()} or by using
+      \co{smp_store_release()} to carry out the stores.
+      Please note that it is \emph{not} sufficient to use \co{barrier()}
+      at beginning of each leg of the "if" statement because, as shown by
+      the example above, optimizing compilers can destroy the control
+      dependency while respecting the letter of the \co{barrier()} law.
+
+ \item
+      Control dependencies require at least one run-time conditional
+      between the prior load and the subsequent store, and this
+      conditional must involve the prior load.
+      If the compiler is able to optimize the conditional away, it will
+      have also optimized away the ordering.
+      Careful use of \co{READ_ONCE()} and \co{WRITE_ONCE()} can help to
+      preserve the needed conditional.
+
+ \item
+      Control dependencies require that the compiler avoid reordering the
+      dependency into nonexistence.
+      Careful use of \co{READ_ONCE()} or \co{atomic{,64}_read()} can help
+      to preserve your control dependency.
+      Please see the COMPILER BARRIER section for more information.
+
+ \item
+      Control dependencies apply only to the then-clause and else-clause
+      of the if-statement containing the control dependency, including
+      any functions that these two clauses call.
+      Control dependencies do \emph{not} apply to code following the
+      if-statement containing the control dependency.
+
+ \item
+      Control dependencies pair normally with other types of barriers.
+
+ \item
+      Control dependencies do \emph{not} provide multicopy atomicity.
+      If you need all the CPUs to see a given store at the same time,
+      use \co{smp_mb()}.
+
+ \item
+      Compilers do not understand control dependencies.
+      It is therefore your job to ensure that they do not break your code.
+\end{itemize}
+
+\subsection{SMP barrier pairing}
+
+When dealing with CPU-CPU interactions, certain types of memory barrier should
+always be paired.
+A lack of appropriate pairing is almost certainly an error.
+
+General barriers pair with each other, though they also pair with most
+other types of barriers, albeit without multicopy atomicity.
+An acquire barrier pairs with a release barrier, but both may also pair
+with other barriers, including of course general barriers.
+A write barrier pairs with an address-dependency barrier,
+a control dependency, an acquire barrier, a release barrier,
+a read barrier, or a general barrier.
+Similarly a read barrier, control dependency, or
+an address-dependency barrier pairs with a write barrier,
+an acquire barrier, a release barrier, or a general barrier:
+
+\begin{VerbatimU}
+	CPU 1                 CPU 2
+	===============       ===============
+	WRITE_ONCE(a, 1);
+	<write barrier>
+	WRITE_ONCE(b, 2);     x = READ_ONCE(b);
+	                      <read barrier>
+	                      y = READ_ONCE(a);
+\end{VerbatimU}
+
+Or:
+
+\begin{VerbatimU}
+	CPU 1                 CPU 2
+	===============	      ===============================
+	a = 1;
+	<write barrier>
+	WRITE_ONCE(b, &a);    x = READ_ONCE(b);
+	                      <implicit AD barrier>
+	                      y = *x;
+\end{VerbatimU}
+
+Or even:
+
+\begin{VerbatimU}
+	CPU 1                 CPU 2
+	===============	      ===============================
+	r1 = READ_ONCE(y);
+	<general barrier>
+	WRITE_ONCE(x, 1);     if (r2 = READ_ONCE(x)) {
+	                      <implicit control dependency>
+	                          WRITE_ONCE(y, 1);
+	                      }
+
+	assert(r1 == 0 || r2 == 0);
+\end{VerbatimU}
+
+Basically, the read barrier always has to be there, even though it can be of
+the "weaker" type.
+
+[!] Note that the stores before the write barrier would normally be expected to
+match the loads after the read barrier or the address-dependency barrier, and
+vice versa:
+
+\begin{VerbatimU}
+	CPU 1                               CPU 2
+	===================                 ===================
+	WRITE_ONCE(a, 1);    }----   --->{  v = READ_ONCE(c);
+	WRITE_ONCE(b, 2);    }    \ /    {  w = READ_ONCE(d);
+	<write barrier>            \        <read barrier>
+	WRITE_ONCE(c, 3);    }    / \    {  x = READ_ONCE(a);
+	WRITE_ONCE(d, 4);    }----   --->{  y = READ_ONCE(b);
+\end{VerbatimU}
+
+\subsection{Examples of memory barrier sequences}
+
+Firstly, write barriers act as partial orderings on store operations.
+Consider the following sequence of events:
+
+\begin{VerbatimU}
+	CPU 1
+	=======================
+	STORE A = 1
+	STORE B = 2
+	STORE C = 3
+	<write barrier>
+	STORE D = 4
+	STORE E = 5
+\end{VerbatimU}
+
+This sequence of events is committed to the memory coherence system in an order
+that the rest of the system might perceive as the unordered set of
+\co{\{ STORE A, STORE B, STORE C \}} all occurring before the unordered
+set of \co{\{ STORE D, STORE E \}}:
+
+\begin{VerbatimU}
+	+-------+       :      :
+	|       |       +------+
+	|       |------>| C=3  |     }     /\
+	|       |  :    +------+     }-----  \  -----> Events perceptible to
+	|       |  :    | A=1  |     }        \/       the rest of the system
+	|       |  :    +------+     }
+	| CPU 1 |  :    | B=2  |     }
+	|       |       +------+     }
+	|       |   wwwwwwwwwwwwwwww }   <--- At this point the write barrier
+	|       |       +------+     }        requires all stores prior to the
+	|       |  :    | E=5  |     }        barrier to be committed before
+	|       |  :    +------+     }        further stores may take place
+	|       |------>| D=4  |     }
+	|       |       +------+
+	+-------+       :      :
+	                   |
+	                   | Sequence in which stores are committed to the
+	                   | memory system by CPU 1
+	                   V
+\end{VerbatimU}
+
+Secondly, address-dependency barriers act as partial orderings on address-
+dependent loads.
+Consider the following sequence of events:
+
+\begin{VerbatimU}
+	CPU 1                   CPU 2
+	======================= =======================
+		{ B = 7; X = 9; Y = 8; C = &Y }
+	STORE A = 1
+	STORE B = 2
+	<write barrier>
+	STORE C = &B            LOAD X
+	STORE D = 4             LOAD C (gets &B)
+	                        LOAD *C (reads B)
+\end{VerbatimU}
+
+Without intervention, CPU~2 may perceive the events on CPU~1 in some
+effectively random order, despite the write barrier issued by CPU~1:
+
+\begin{VerbatimU}
+	+-------+       :      :                :       :
+	|       |       +------+                +-------+  | Sequence of update
+	|       |------>| B=2  |-----       --->| Y->8  |  | of perception on
+	|       |  :    +------+     \          +-------+  | CPU 2
+	| CPU 1 |  :    | A=1  |      \     --->| C->&Y |  V
+	|       |       +------+       |        +-------+
+	|       |   wwwwwwwwwwwwwwww   |        :       :
+	|       |       +------+       |        :       :
+	|       |  :    | C=&B |---    |        :       :       +-------+
+	|       |  :    +------+   \   |        +-------+       |       |
+	|       |------>| D=4  |    ----------->| C->&B |------>|       |
+	|       |       +------+       |        +-------+       |       |
+	+-------+       :      :       |        :       :       |       |
+	                               |        :       :       |       |
+	                               |        :       :       | CPU 2 |
+	                               |        +-------+       |       |
+	    Apparently incorrect --->  |        | B->7  |------>|       |
+	    perception of B (!)        |        +-------+       |       |
+	                               |        :       :       |       |
+	                               |        +-------+       |       |
+	    The load of X holds --->    \       | X->9  |------>|       |
+	    up the maintenance           \      +-------+       |       |
+	    of coherence of B             ----->| B->2  |       +-------+
+	                                        +-------+
+	                                        :       :
+\end{VerbatimU}
+
+In the above example, CPU~2 perceives that B is~7, despite the load of~*C
+(which would be~B) coming after the LOAD of~C.
+
+If, however, an address-dependency barrier were to be placed between the load
+of~C and the load of~*C (ie: B) on CPU~2:
+
+\begin{VerbatimU}
+	CPU 1                   CPU 2
+	=======================	=======================
+		{ B = 7; X = 9; Y = 8; C = &Y }
+	STORE A = 1
+	STORE B = 2
+	<write barrier>
+	STORE C = &B            LOAD X
+	STORE D = 4             LOAD C (gets &B)
+	                        <AD barrier>
+	                        LOAD *C (reads B)
+\end{VerbatimU}
+
+then the following will occur:
+
+\begin{VerbatimU}
+	+-------+       :      :                :       :
+	|       |       +------+                +-------+
+	|       |------>| B=2  |-----       --->| Y->8  |
+	|       |  :    +------+     \          +-------+
+	| CPU 1 |  :    | A=1  |      \     --->| C->&Y |
+	|       |       +------+       |        +-------+
+	|       |   wwwwwwwwwwwwwwww   |        :       :
+	|       |       +------+       |        :       :
+	|       |  :    | C=&B |---    |        :       :       +-------+
+	|       |  :    +------+   \   |        +-------+       |       |
+	|       |------>| D=4  |    ----------->| C->&B |------>|       |
+	|       |       +------+       |        +-------+       |       |
+	+-------+       :      :       |        :       :       |       |
+	                               |        :       :       |       |
+	                               |        :       :       | CPU 2 |
+	                               |        +-------+       |       |
+	                               |        | X->9  |------>|       |
+	                               |        +-------+       |       |
+	  Makes sure all effects --->   \   aaaaaaaaaaaaaaaaa   |       |
+	  prior to the store of C        \      +-------+       |       |
+	  are perceptible to              ----->| B->2  |------>|       |
+	  subsequent loads                      +-------+       |       |
+	                                        :       :       +-------+
+\end{VerbatimU}
+
+And thirdly, a read barrier acts as a partial order on loads.
+Consider the following sequence of events:
+
+\begin{VerbatimU}
+	CPU 1                   CPU 2
+	=======================	=======================
+		{ A = 0, B = 9 }
+	STORE A=1
+	<write barrier>
+	STORE B=2
+	                        LOAD B
+	                        LOAD A
+\end{VerbatimU}
+
+Without intervention, CPU~2 may then choose to perceive the events on CPU~1 in
+some effectively random order, despite the write barrier issued by CPU~1:
+
+  \begin{VerbatimU}
+	+-------+       :      :                :       :
+	|       |       +------+                +-------+
+	|       |------>| A=1  |------      --->| A->0  |
+	|       |       +------+      \         +-------+
+	| CPU 1 |   wwwwwwwwwwwwwwww   \    --->| B->9  |
+	|       |       +------+        |       +-------+
+	|       |------>| B=2  |---     |       :       :
+	|       |       +------+   \    |       :       :       +-------+
+	+-------+       :      :    \   |       +-------+       |       |
+	                             ---------->| B->2  |------>|       |
+	                                |       +-------+       | CPU 2 |
+	                                |       | A->0  |------>|       |
+	                                |       +-------+       |       |
+	                                |       :       :       +-------+
+	                                 \      :       :
+	                                  \     +-------+
+	                                   ---->| A->1  |
+	                                        +-------+
+	                                        :       :
+\end{VerbatimU}
+
+If, however, a read barrier were to be placed between the load of~B and the
+load of~A on CPU~2:
+
+\begin{VerbatimU}
+	CPU 1                   CPU 2
+	=======================	=======================
+		{ A = 0, B = 9 }
+	STORE A=1
+	<write barrier>
+	STORE B=2
+	                        LOAD B
+	                        <read barrier>
+	                        LOAD A
+\end{VerbatimU}
+
+then the partial ordering imposed by CPU~1 will be perceived correctly by
+CPU~2:
+
+\begin{VerbatimU}
+	+-------+       :      :                :       :
+	|       |       +------+                +-------+
+	|       |------>| A=1  |------      --->| A->0  |
+	|       |       +------+      \         +-------+
+	| CPU 1 |   wwwwwwwwwwwwwwww   \    --->| B->9  |
+	|       |       +------+        |       +-------+
+	|       |------>| B=2  |---     |       :       :
+	|       |       +------+   \    |       :       :       +-------+
+	+-------+       :      :    \   |       +-------+       |       |
+	                             ---------->| B->2  |------>|       |
+	                                |       +-------+       | CPU 2 |
+	                                |       :       :       |       |
+	                                |       :       :       |       |
+	  At this point the read ---->   \  rrrrrrrrrrrrrrrrr   |       |
+	  barrier causes all effects      \     +-------+       |       |
+	  prior to the storage of B        ---->| A->1  |------>|       |
+	  to be perceptible to CPU 2            +-------+       |       |
+	                                        :       :       +-------+
+\end{VerbatimU}
+
+To illustrate this more completely, consider what could happen if the code
+contained a load of A either side of the read barrier:
+
+\begin{VerbatimU}
+	CPU 1                   CPU 2
+	=======================	=======================
+		{ A = 0, B = 9 }
+	STORE A=1
+	<write barrier>
+	STORE B=2
+	                        LOAD B
+	                        LOAD A [first load of A]
+	                        <read barrier>
+	                        LOAD A [second load of A]
+\end{VerbatimU}
+
+Even though the two loads of A both occur after the load of B, they may both
+come up with different values:
+
+\begin{VerbatimU}
+	+-------+       :      :                :       :
+	|       |       +------+                +-------+
+	|       |------>| A=1  |------      --->| A->0  |
+	|       |       +------+      \         +-------+
+	| CPU 1 |   wwwwwwwwwwwwwwww   \    --->| B->9  |
+	|       |       +------+        |       +-------+
+	|       |------>| B=2  |---     |       :       :
+	|       |       +------+   \    |       :       :       +-------+
+	+-------+       :      :    \   |       +-------+       |       |
+	                             ---------->| B->2  |------>|       |
+	                                |       +-------+       | CPU 2 |
+	                                |       :       :       |       |
+	                                |       :       :       |       |
+	                                |       +-------+       |       |
+	                                |       | A->0  |------>| 1st   |
+	                                |       +-------+       |       |
+	  At this point the read ---->   \  rrrrrrrrrrrrrrrrr   |       |
+	  barrier causes all effects      \     +-------+       |       |
+	  prior to the storage of B        ---->| A->1  |------>| 2nd   |
+	  to be perceptible to CPU 2            +-------+       |       |
+	                                        :       :       +-------+
+\end{VerbatimU}
+
+But it may be that the update to A from CPU 1 becomes perceptible to CPU 2
+before the read barrier completes anyway:
+
+\begin{VerbatimU}
+	+-------+       :      :                :       :
+	|       |       +------+                +-------+
+	|       |------>| A=1  |------      --->| A->0  |
+	|       |       +------+      \         +-------+
+	| CPU 1 |   wwwwwwwwwwwwwwww   \    --->| B->9  |
+	|       |       +------+        |       +-------+
+	|       |------>| B=2  |---     |       :       :
+	|       |       +------+   \    |       :       :       +-------+
+	+-------+       :      :    \   |       +-------+       |       |
+	                             ---------->| B->2  |------>|       |
+	                                |       +-------+       | CPU 2 |
+	                                |       :       :       |       |
+	                                 \      :       :       |       |
+	                                  \     +-------+       |       |
+	                                   ---->| A->1  |------>| 1st   |
+	                                        +-------+       |       |
+	                                    rrrrrrrrrrrrrrrrr   |       |
+	                                        +-------+       |       |
+	                                        | A->1  |------>| 2nd   |
+	                                        +-------+       |       |
+	                                        :       :       +-------+
+\end{VerbatimU}
+
+The guarantee is that the second load will always come up with \co{A == 1}
+if the load of~B came up with \co{B == 2}.
+No such guarantee exists for the first load of~A; that may come up with
+either \co{A == 0} or \co{A == 1}.
+
+
+\subsection{Read memory barriers vs load speculation}
+
+Many CPUs speculate with loads:
+That is they see that they will need to load an item from memory, and
+they find a time where they're not using the bus for any other loads,
+and so do the load in advance---even though they haven't actually
+got to that point in the instruction execution flow yet.
+This permits the actual load instruction to potentially complete
+immediately because the CPU already has the value to hand.
+
+It may turn out that the CPU didn't actually need the value---perhaps
+because a branch circumvented the load---in which case it can discard
+the value or just cache it for later use.
+
+Consider:
+
+\begin{VerbatimU}
+	CPU 1    CPU 2
+	======== =======================
+	         LOAD B
+	         DIVIDE  } Divide instructions generally
+	         DIVIDE  } take a long time to perform
+	         LOAD A
+\end{VerbatimU}
+
+Which might appear as this:
+
+\begin{VerbatimU}
+	                                        :       :       +-------+
+	                                        +-------+       |       |
+	                                    --->| B->2  |------>|       |
+	                                        +-------+       | CPU 2 |
+	                                        :       :DIVIDE |       |
+	                                        +-------+       |       |
+	The CPU being busy doing a --->     --->| A->0  |~~~~   |       |
+	division speculates on the              +-------+   ~   |       |
+	LOAD of A                               :       :   ~   |       |
+	                                        :       :DIVIDE |       |
+	                                        :       :   ~   |       |
+	Once the divisions are complete -->     :       :   ~-->|       |
+	the CPU can then perform the            :       :       |       |
+	LOAD with immediate effect              :       :       +-------+
+\end{VerbatimU}
+
+Placing a read barrier or an address-dependency barrier just before the second
+load:
+
+\begin{VerbatimU}
+	CPU 1	CPU 2
+	=======	=======================
+	        LOAD B
+	        DIVIDE
+	        DIVIDE
+	        <read barrier>
+	        LOAD A
+\end{VerbatimU}
+
+will force any value speculatively obtained to be reconsidered to an extent
+dependent on the type of barrier used.
+If there was no change made to the speculated memory location, then the
+speculated value will just be used:
+
+\begin{VerbatimU}
+	                                        :       :       +-------+
+	                                        +-------+       |       |
+	                                    --->| B->2  |------>|       |
+	                                        +-------+       | CPU 2 |
+	                                        :       :DIVIDE |       |
+	                                        +-------+       |       |
+	The CPU being busy doing a --->     --->| A->0  |~~~~   |       |
+	division speculates on the              +-------+   ~   |       |
+	LOAD of A                               :       :   ~   |       |
+	                                        :       :DIVIDE |       |
+	                                        :       :   ~   |       |
+	                                        :       :   ~   |       |
+	                                    rrrrrrrrrrrrrrrr~   |       |
+	                                        :       :   ~   |       |
+	                                        :       :   ~-->|       |
+	                                        :       :       |       |
+	                                        :       :       +-------+
+\end{VerbatimU}
+
+but if there was an update or an invalidation from another CPU pending, then
+the speculation will be cancelled and the value reloaded:
+
+\begin{VerbatimU}
+	                                        :       :       +-------+
+	                                        +-------+       |       |
+	                                    --->| B->2  |------>|       |
+	                                        +-------+       | CPU 2 |
+	                                        :       :DIVIDE |       |
+	                                        +-------+       |       |
+	The CPU being busy doing a --->     --->| A->0  |~~~~   |       |
+	division speculates on the              +-------+   ~   |       |
+	LOAD of A                               :       :   ~   |       |
+	                                        :       :DIVIDE |       |
+	                                        :       :   ~   |       |
+	                                        :       :   ~   |       |
+	                                    rrrrrrrrrrrrrrrrr   |       |
+	                                        +-------+       |       |
+	The speculation is discarded --->   --->| A->1  |------>|       |
+	and an updated value is                 +-------+       |       |
+	retrieved                               :       :       +-------+
+\end{VerbatimU}
+
+
+\subsection{Multicopy atomicity}
+
+Multicopy atomicity is a deeply intuitive notion about ordering that is
+not always provided by real computer systems, namely that a given store
+becomes visible at the same time to all CPUs, or, alternatively, that all
+CPUs agree on the order in which all stores become visible.
+However, support of full multicopy atomicity would rule out valuable
+hardware optimizations, so a weaker form called ``other multicopy atomicity''
+instead guarantees only that a given store becomes visible at the same
+time to all \emph{other} CPUs.
+The remainder of this document discusses this weaker form, but for brevity
+will call it simply ``multicopy atomicity''.
+
+The following example demonstrates multicopy atomicity:
+
+\begin{VerbatimU}
+	CPU 1                   CPU 2                 CPU 3
+	======================= ===================== ==================
+		{ X = 0, Y = 0 }
+	STORE X=1               r1=LOAD X (reads 1)   LOAD Y (reads 1)
+	                        <general barrier>     <read barrier>
+	                        STORE Y=r1            LOAD X
+\end{VerbatimU}
+
+Suppose that CPU~2's load from~X returns~1, which it then stores to~Y,
+and CPU~3's load from~Y returns~1.
+This indicates that CPUd~1's store to~X precedes CPU~2's load from~X and
+that CPU~2's store to~Y precedes CPU~3's load from~Y.
+In addition, the memory barriers guarantee that CPU~2 executes its load
+before its store, and CPU~3 loads from~Y before it loads from~X.
+The question is then "Can CPU~3's load from~X return~0?"
+
+Because CPU~3's load from~X in some sense comes after CPU~2's load, it
+is natural to expect that CPU~3's load from~X must therefore return~1.
+This expectation follows from multicopy atomicity:
+If a load executing on CPU~B follows a load from the same variable
+executing on CPU~A (and CPU~A did not originally store the value which
+it read), then on multicopy-atomic systems, CPU~B's load must return
+either the same value that CPU~A's load did or some later value.
+However, the Linux kernel does not require systems to be multicopy atomic.
+
+The use of a general memory barrier in the example above compensates
+for any lack of multicopy atomicity.
+In the example, if CPU~2's load from~X returns~1 and CPU~3's load from~Y
+returns~1, then CPU~3's load from~X must indeed also return~1.
+
+However, dependencies, read barriers, and write barriers are not always
+able to compensate for non-multicopy atomicity.
+For example, suppose that CPU~2's general barrier is removed from the
+above example, leaving only the data dependency shown below:
+
+\begin{VerbatimU}
+	CPU 1       CPU 2                CPU 3
+	=========== ==================== =================
+		{ X = 0, Y = 0 }
+	STORE X=1   r1=LOAD X (reads 1)  LOAD Y (reads 1)
+	            <data dependency>    <read barrier>
+	            STORE Y=r1           LOAD X (reads 0)
+\end{VerbatimU}
+
+This substitution allows non-multicopy atomicity to run rampant:
+In this example, it is perfectly legal for CPU~2's load from~X to return~1,
+CPU~3's load from~Y to return~1, and its load from~X to return~0.
+
+The key point is that although CPU~2's data dependency orders its load
+and store, it does not guarantee to order CPU~1's store.
+Thus, if this example runs on a non-multicopy-atomic system where CPUs~1
+and~2 share a store buffer or a level of cache, CPU~2 might have early
+access to CPU~1's writes.
+General barriers are therefore required to ensure that all CPUs agree
+on the combined order of multiple accesses.
+
+General barriers can compensate not only for non-multicopy atomicity,
+but can also generate additional ordering that can ensure that \emph{all}
+CPUs will perceive the same order of \emph{all} operations.
+In contrast, a chain of release-acquire pairs do not provide this
+additional ordering, which means that only those CPUs on the chain are
+guaranteed to agree on the combined order of the accesses.
+For example, switching to C code in deference to the ghost of Herman
+Hollerith:
+
+\begin{VerbatimU}
+	int u, v, x, y, z;
+
+	void cpu0(void)
+	{
+		r0 = smp_load_acquire(&x);
+		WRITE_ONCE(u, 1);
+		smp_store_release(&y, 1);
+	}
+
+	void cpu1(void)
+	{
+		r1 = smp_load_acquire(&y);
+		r4 = READ_ONCE(v);
+		r5 = READ_ONCE(u);
+		smp_store_release(&z, 1);
+	}
+
+	void cpu2(void)
+	{
+		r2 = smp_load_acquire(&z);
+		smp_store_release(&x, 1);
+	}
+
+	void cpu3(void)
+	{
+		WRITE_ONCE(v, 1);
+		smp_mb();
+		r3 = READ_ONCE(u);
+	}
+\end{VerbatimU}
+
+Because \co{cpu0()}, \co{cpu1()}, and \co{cpu2()} participate in a chain of
+\co{smp_store_release()}/\co{smp_load_acquire()} pairs, the following outcome
+is prohibited:
+
+\begin{VerbatimU}
+	r0 == 1 && r1 == 1 && r2 == 1
+\end{VerbatimU}
+
+Furthermore, because of the release-acquire relationship between \co{cpu0()}
+and \co{cpu1()}, \co{cpu1()} must see \co{cpu0()}'s writes, so that the
+following outcome is prohibited:
+
+\begin{VerbatimU}
+	r1 == 1 && r5 == 0
+\end{VerbatimU}
+
+However, the ordering provided by a release-acquire chain is local
+to the CPUs participating in that chain and does not apply to \co{cpu3()},
+at least aside from stores.
+Therefore, the following outcome is possible:
+
+\begin{VerbatimU}
+	r0 == 0 && r1 == 1 && r2 == 1 && r3 == 0 && r4 == 0
+\end{VerbatimU}
+
+As an aside, the following outcome is also possible:
+
+\begin{VerbatimU}
+	r0 == 0 && r1 == 1 && r2 == 1 && r3 == 0 && r4 == 0 && r5 == 1
+\end{VerbatimU}
+
+Although \co{cpu0()}, \co{cpu1()}, and \co{cpu2()} will see their
+respective reads and writes in order, CPUs not involved in the
+release-acquire chain might well disagree on the order.
+This disagreement stems from the fact that the weak memory-barrier
+instructions used to implement \co{smp_load_acquire()} and
+\co{smp_store_release()} are not required to order prior stores against
+subsequent loads in all cases.
+This means that \co{cpu3()} can see \co{cpu0()}'s store to~u as happening
+\emph{after} \co{cpu1()}'s load from~v, even though both \co{cpu0()} and
+\co{cpu1()} agree that these two operations occurred in the intended order.
+
+However, please keep in mind that \co{smp_load_acquire()} is not magic.
+In particular, it simply reads from its argument with ordering.
+It does \emph{not} ensure that any particular value will be read.
+Therefore, the following outcome is possible:
+
+\begin{VerbatimU}
+	r0 == 0 && r1 == 0 && r2 == 0 && r5 == 0
+\end{VerbatimU}
+
+Note that this outcome can happen even on a mythical sequentially
+consistent system where nothing is ever reordered.
+
+To reiterate, if your code requires full ordering of all operations,
+use general barriers throughout.
+
+
+\section{Explicit kernel barriers}
+
+The Linux kernel has a variety of different barriers that act at different
+levels:
+
+\begin{itemize}
+ \item Compiler barrier.
+ \item CPU memory barriers.
+\end{itemize}
+
+
+\subsection{Compiler barrier}
+
+The Linux kernel has an explicit compiler barrier function that prevents the
+compiler from moving the memory accesses either side of it to the other side:
+
+\begin{VerbatimU}
+	barrier();
+\end{VerbatimU}
+
+This is a general barrier---there are no read-read or write-write
+variants of \co{barrier()}.
+However, \co{READ_ONCE()} and \co{WRITE_ONCE()} can be thought of as
+weak forms of \co{barrier()} that affect only the specific accesses
+flagged by the \co{READ_ONCE()} or \co{WRITE_ONCE()}.
+
+The \co{barrier()} function has the following effects:
+
+\begin{itemize}
+ \item
+     Prevents the compiler from reordering accesses following the
+     \co{barrier()} to precede any accesses preceding the \co{barrier()}.
+     One example use for this property is to ease communication between
+     interrupt-handler code and the code that was interrupted.
+
+ \item
+     Within a loop, forces the compiler to load the variables used
+     in that loop's conditional on each pass through that loop.
+\end{itemize}
+
+The \co{READ_ONCE()} and \co{WRITE_ONCE()} functions can prevent any number of
+optimizations that, while perfectly safe in single-threaded code, can
+be fatal in concurrent code.
+Here are some examples of these sorts of optimizations:
+
+\begin{itemize}
+ \item
+     The compiler is within its rights to reorder loads and stores
+     to the same variable, and in some cases, the CPU is within its
+     rights to reorder loads to the same variable.
+     This means that the following code:
+
+\begin{VerbatimU}
+	a[0] = x;
+	a[1] = x;
+\end{VerbatimU}
+
+     Might result in an older value of~x stored in \co{a[1]} than in \co{a[0]}.
+     Prevent both the compiler and the CPU from doing this as follows:
+
+\begin{VerbatimU}
+	a[0] = READ_ONCE(x);
+	a[1] = READ_ONCE(x);
+\end{VerbatimU}
+
+     In short, \co{READ_ONCE()} and \co{WRITE_ONCE()} provide cache coherence
+     for accesses from multiple CPUs to a single variable.
+
+ \item
+     The compiler is within its rights to merge successive loads from
+     the same variable.
+     Such merging can cause the compiler to "optimize" the following code:
+
+\begin{VerbatimU}
+	while (tmp = a)
+		do_something_with(tmp);
+\end{VerbatimU}
+
+     into the following code, which, although in some sense legitimate
+     for single-threaded code, is almost certainly not what the developer
+     intended:
+
+\begin{VerbatimU}
+	if (tmp = a)
+		for (;;)
+			do_something_with(tmp);
+\end{VerbatimU}
+
+     Use \co{READ_ONCE()} to prevent the compiler from doing this to you:
+
+\begin{VerbatimU}
+	while (tmp = READ_ONCE(a))
+		do_something_with(tmp);
+\end{VerbatimU}
+
+ \item
+     The compiler is within its rights to reload a variable, for example,
+     in cases where high register pressure prevents the compiler from
+     keeping all data of interest in registers.
+     The compiler might therefore optimize the variable 'tmp' out of
+     our previous example:
+
+\begin{VerbatimU}
+	while (tmp = a)
+		do_something_with(tmp);
+\end{VerbatimU}
+
+     This could result in the following code, which is perfectly safe in
+     single-threaded code, but can be fatal in concurrent code:
+
+\begin{VerbatimU}
+	while (a)
+		do_something_with(a);
+\end{VerbatimU}
+
+     For example, the optimized version of this code could result in
+     passing a zero to \co{do_something_with()} in the case where the variable
+     a was modified by some other CPU between the "while" statement and
+     the call to \co{do_something_with()}.
+
+     Again, use \co{READ_ONCE()} to prevent the compiler from doing this:
+
+\begin{VerbatimU}
+	while (tmp = READ_ONCE(a))
+		do_something_with(tmp);
+\end{VerbatimU}
+
+     Note that if the compiler runs short of registers, it might save
+     tmp onto the stack.
+     The overhead of this saving and later restoring is why compilers
+     reload variables.
+     Doing so is perfectly safe for single-threaded code, so you need
+     to tell the compiler about cases where it is not safe.
+
+ \item
+     The compiler is within its rights to omit a load entirely if it knows
+     what the value will be.
+     For example, if the compiler can prove that the value of variable~'a'
+     is always zero, it can optimize this code:
+
+\begin{VerbatimU}
+	while (tmp = a)
+		do_something_with(tmp);
+\end{VerbatimU}
+
+     Into this:
+
+\begin{VerbatimU}
+	do { } while (0);
+\end{VerbatimU}
+
+     This transformation is a win for single-threaded code because it
+     gets rid of a load and a branch.
+     The problem is that the compiler will carry out its proof assuming
+     that the current CPU is the only one updating variable~'a'.
+     If variable~'a' is shared, then the compiler's proof will be erroneous.
+     Use \co{READ_ONCE()} to tell the compiler that it doesn't know as
+     much as it thinks it does:
+
+\begin{VerbatimU}
+	while (tmp = READ_ONCE(a))
+		do_something_with(tmp);
+\end{VerbatimU}
+
+     But please note that the compiler is also closely watching what you
+     do with the value after the \co{READ_ONCE()}.
+     For example, suppose you do the following and MAX is a preprocessor
+     macro with the value~1:
+
+\begin{VerbatimU}
+	while ((tmp = READ_ONCE(a)) % MAX)
+		do_something_with(tmp);
+\end{VerbatimU}
+
+     Then the compiler knows that the result of the "\co{\%}" operator applied
+     to MAX will always be zero, again allowing the compiler to optimize
+     the code into near-nonexistence.
+     (It will still load from the variable~'a'.)
+
+ \item
+     Similarly, the compiler is within its rights to omit a store entirely
+     if it knows that the variable already has the value being stored.
+     Again, the compiler assumes that the current CPU is the only one
+     storing into the variable, which can cause the compiler to do the
+     wrong thing for shared variables.
+     For example, suppose you have the following:
+
+\begin{VerbatimU}
+	a = 0;
+	... Code that does not store to variable a ...
+	a = 0;
+\end{VerbatimU}
+
+     The compiler sees that the value of variable~'a' is already zero, so
+     it might well omit the second store.
+     This would come as a fatal surprise if some other CPU might have
+     stored to variable~'a' in the meantime.
+
+     Use \co{WRITE_ONCE()} to prevent the compiler from making this sort of
+     wrong guess:
+
+\begin{VerbatimU}
+	WRITE_ONCE(a, 0);
+	... Code that does not store to variable a ...
+	WRITE_ONCE(a, 0);
+\end{VerbatimU}
+
+\item
+     The compiler is within its rights to reorder memory accesses unless
+     you tell it not to.
+     For example, consider the following interaction between process-level
+     code and an interrupt handler:
+
+\begin{VerbatimU}
+	void process_level(void)
+	{
+		msg = get_message();
+		flag = true;
+	}
+
+	void interrupt_handler(void)
+	{
+		if (flag)
+			process_message(msg);
+	}
+\end{VerbatimU}
+
+     There is nothing to prevent the compiler from transforming
+     \co{process_level()} to the following, in fact, this might well be a
+     win for single-threaded code:
+
+\begin{VerbatimU}
+	void process_level(void)
+	{
+		flag = true;
+		msg = get_message();
+	}
+\end{VerbatimU}
+
+     If the interrupt occurs between these two statement, then
+     \co{interrupt_handler()} might be passed a garbled msg.
+     Use \co{WRITE_ONCE()} to prevent this as follows:
+
+\begin{VerbatimU}
+	void process_level(void)
+	{
+		WRITE_ONCE(msg, get_message());
+		WRITE_ONCE(flag, true);
+	}
+
+	void interrupt_handler(void)
+	{
+		if (READ_ONCE(flag))
+			process_message(READ_ONCE(msg));
+	}
+\end{VerbatimU}
+
+     Note that the \co{READ_ONCE()} and \co{WRITE_ONCE()} wrappers in
+     \co{interrupt_handler()} are needed if this interrupt handler can itself
+     be interrupted by something that also accesses 'flag' and 'msg',
+     for example, a nested interrupt or an NMI\@.
+     Otherwise, \co{READ_ONCE()} and \co{WRITE_ONCE()} are not needed
+     in \co{interrupt_handler()} other than for documentation purposes.
+     (Note also that nested interrupts do not typically occur in modern
+     Linux kernels, in fact, if an interrupt handler returns with
+     interrupts enabled, you will get a \co{WARN_ONCE()} splat.)
+
+     You should assume that the compiler can move \co{READ_ONCE()} and
+     \co{WRITE_ONCE()} past code not containing \co{READ_ONCE()},
+     \co{WRITE_ONCE()}, \co{barrier()}, or similar primitives.
+
+     This effect could also be achieved using \co{barrier()}, but
+     \co{READ_ONCE()} and \co{WRITE_ONCE()} are more selective:
+     With \co{READ_ONCE()} and \co{WRITE_ONCE()}, the compiler need only
+     forget the contents of the indicated memory locations, while with
+     \co{barrier()} the compiler must discard the value of all memory
+     locations that it has currently cached in any machine registers.
+     Of course, the compiler must also respect the order in which the
+     \co{READ_ONCE()}s and \co{WRITE_ONCE()}s occur, though the CPU of
+     course need not do so.
+
+ \item
+     The compiler is within its rights to invent stores to a variable,
+     as in the following example:
+
+\begin{VerbatimU}
+	if (a)
+		b = a;
+	else
+		b = 42;
+\end{VerbatimU}
+
+     The compiler might save a branch by optimizing this as follows:
+
+\begin{VerbatimU}
+	b = 42;
+	if (a)
+		b = a;
+\end{VerbatimU}
+
+     In single-threaded code, this is not only safe, but also saves
+     a branch.
+     Unfortunately, in concurrent code, this optimization could cause
+     some other CPU to see a spurious value of~42---even if variable~'a'
+     was never zero---when loading variable~'b'.
+     Use \co{WRITE_ONCE()} to prevent this as follows:
+
+\begin{VerbatimU}
+	if (a)
+		WRITE_ONCE(b, a);
+	else
+		WRITE_ONCE(b, 42);
+\end{VerbatimU}
+
+     The compiler can also invent loads.
+     These are usually less damaging, but they can result in cache-line
+     bouncing and thus in poor performance and scalability.
+     Use \co{READ_ONCE()} to prevent invented loads.
+
+ \item
+     For aligned memory locations whose size allows them to be accessed
+     with a single memory-reference instruction, prevents "load tearing"
+     and "store tearing," in which a single large access is replaced by
+     multiple smaller accesses.
+     For example, given an architecture having 16-bit store instructions
+     with 7-bit immediate fields, the compiler might be tempted to use
+     two 16-bit store-immediate instructions to implement the following
+     32-bit store:
+
+\begin{VerbatimU}
+	p = 0x00010002;
+\end{VerbatimU}
+
+     Please note that GCC really does use this sort of optimization,
+     which is not surprising given that it would likely take more
+     than two instructions to build the constant and then store it.
+     This optimization can therefore be a win in single-threaded code.
+     In fact, a recent bug (since fixed) caused GCC to incorrectly use
+     this optimization in a volatile store.
+     In the absence of such bugs, use of \co{WRITE_ONCE()} prevents
+     store tearing in the following example:
+
+\begin{VerbatimU}
+	WRITE_ONCE(p, 0x00010002);
+\end{VerbatimU}
+
+     Use of packed structures can also result in load and store tearing,
+     as in this example:
+
+\begin{VerbatimU}
+	struct __attribute__((__packed__)) foo {
+		short a;
+		int b;
+		short c;
+	};
+	struct foo foo1, foo2;
+	...
+
+	foo2.a = foo1.a;
+	foo2.b = foo1.b;
+	foo2.c = foo1.c;
+\end{VerbatimU}
+
+     Because there are no \co{READ_ONCE()} or \co{WRITE_ONCE()} wrappers and no
+     volatile markings, the compiler would be well within its rights to
+     implement these three assignment statements as a pair of 32-bit
+     loads followed by a pair of 32-bit stores.
+     This would result in load tearing on 'foo1.b' and store tearing
+     on 'foo2.b'.
+     \co{READ_ONCE()} and \co{WRITE_ONCE()} again prevent tearing in
+     this example:
+
+\begin{VerbatimU}
+	foo2.a = foo1.a;
+	WRITE_ONCE(foo2.b, READ_ONCE(foo1.b));
+	foo2.c = foo1.c;
+\end{VerbatimU}
+\end{itemize}
+
+All that aside, it is never necessary to use \co{READ_ONCE()} and
+\co{WRITE_ONCE()} on a variable that has been marked volatile.
+For example, because 'jiffies' is marked volatile, it is never necessary to
+say \co{READ_ONCE(jiffies)}.
+The reason for this is that \co{READ_ONCE()} and \co{WRITE_ONCE()} are
+implemented as volatile casts, which has no effect when its argument is
+already marked volatile.
+
+Please note that these compiler barriers have no direct effect on the CPU,
+which may then reorder things however it wishes.
+
+
+\subsection{CPU memory barriers}
+
+The Linux kernel has seven basic CPU memory barriers:
+
+\begin{VerbatimU}
+	TYPE                  MANDATORY       SMP CONDITIONAL
+	===================== =============== ===============
+	GENERAL               mb()            smp_mb()
+	WRITE                 wmb()           smp_wmb()
+	READ                  rmb()           smp_rmb()
+	ADDRESS DEPENDENCY                    READ_ONCE()
+\end{VerbatimU}
+
+All memory barriers except the address-dependency barriers imply a compiler
+barrier.
+Address dependencies do not impose any additional compiler ordering.
+
+Aside:
+In the case of address dependencies, the compiler would be expected
+to issue the loads in the correct order (eg. `\co{a[b]}` would have to load
+the value of~b before loading \co{a[b]}), however there is no guarantee in
+the C specification that the compiler may not speculate the value of~b
+(eg., is equal to~1) and load \co{a[b]} before~b (eg.,
+\co{tmp = a[1]; if (b != 1) tmp = a[b];}).
+There is also the problem of a compiler reloading~b after having loaded
+\co{a[b]}, thus having a newer copy of~b than \co{a[b]}.
+A consensus has not yet been reached about these problems, however the
+\co{READ_ONCE()} macro is a good place to start looking.
+
+SMP memory barriers are reduced to compiler barriers on uniprocessor compiled
+systems because it is assumed that a CPU will appear to be self-consistent,
+and will order overlapping accesses correctly with respect to itself.
+However, see the subsection on "Virtual Machine Guests" below.
+
+[!] Note that SMP memory barriers \emph{must} be used to control the ordering of
+references to shared memory on SMP systems, though the use of locking instead
+is sufficient.
+
+Mandatory barriers should not be used to control SMP effects, since mandatory
+barriers impose unnecessary overhead on both SMP and UP systems.
+They may, however, be used to control MMIO effects on accesses through
+relaxed memory I/O windows.
+These barriers are required even on non-SMP systems as they affect the order
+in which memory operations appear to a device by prohibiting both the
+compiler and the CPU from reordering them.
+
+
+There are some more advanced barrier functions:
+
+\begin{itemize}
+ \item \tco{smp_store_mb(var, value)}
+
+     This assigns the value to the variable and then inserts a full memory
+     barrier after it.  It isn't guaranteed to insert anything more than a
+     compiler barrier in a UP compilation.
+
+
+ \item \tco{smp_mb__before_atomic()} and \tco{smp_mb__after_atomic()}
+
+     These are for use with atomic RMW functions that do not imply memory
+     barriers, but where the code needs a memory barrier.
+     Examples for atomic RMW functions that do not imply a memory barrier
+     are e.g., add, subtract, (failed) conditional operations,
+     \co{_relaxed} functions, but not \co{atomic_read} or \co{atomic_set}.
+     A common example where a memory barrier may be required is when
+     atomic ops are used for reference counting.
+
+     These are also used for atomic RMW bitop functions that do not imply a
+     memory barrier (such as \co{set_bit} and \co{clear_bit}).
+
+     As an example, consider a piece of code that marks an object as being dead
+     and then decrements the object's reference count:
+
+\begin{VerbatimU}
+	obj->dead = 1;
+	smp_mb__before_atomic();
+	atomic_dec(&obj->ref_count);
+\end{VerbatimU}
+
+     This makes sure that the death mark on the object is perceived to be set
+     \emph{before} the reference counter is decremented.
+
+     See \path{Documentation/atomic_{t,bitops}.txt} for more information.
+
+   \item \tco{dma_wmb()}, \tco{dma_rmb()}, and \tco{dma_mb()}
+
+     These are for use with consistent memory to guarantee the ordering
+     of writes or reads of shared memory accessible to both the CPU and a
+     DMA capable device.
+     See \path{Documentation/core-api/dma-api.rst} file for more
+     information about consistent memory.
+
+     For example, consider a device driver that shares memory with a device
+     and uses a descriptor status value to indicate if the descriptor belongs
+     to the device or the CPU, and a doorbell to notify it when new
+     descriptors are available:
+
+\begin{VerbatimU}
+	if (desc->status != DEVICE_OWN) {
+		/* do not read data until we own descriptor */
+		dma_rmb();
+
+		/* read/modify data */
+		read_data = desc->data;
+		desc->data = write_data;
+
+		/* flush modifications before status update */
+		dma_wmb();
+
+		/* assign ownership */
+		desc->status = DEVICE_OWN;
+
+		/* Make descriptor status visible to the device followed by
+		 * notify device of new descriptor
+		 */
+		writel(DESC_NOTIFY, doorbell);
+	}
+\end{VerbatimU}
+
+     The \co{dma_rmb()} allows us to guarantee that the device has released
+     ownership before we read the data from the descriptor, and the
+     \co{dma_wmb()} allows us to guarantee the data is written to the
+     descriptor before the device can see it now has ownership.
+     The \co{dma_mb()} implies both a \co{dma_rmb()} and a \co{dma_wmb()}.
+
+     Note that the \co{dma_*()} barriers do not provide any ordering
+     guarantees for accesses to MMIO regions.
+     See the later "KERNEL I/O BARRIER EFFECTS" subsection for more
+     information about I/O accessors and MMIO ordering.
+
+ \item \tco{pmem_wmb()}
+
+     This is for use with persistent memory to ensure that stores for which
+     modifications are written to persistent storage reached a platform
+     durability domain.
+
+     For example, after a non-temporal write to pmem region, we use
+     \co{pmem_wmb()} to ensure that stores have reached a platform
+     durability domain.
+     This ensures that stores have updated persistent storage before any
+     data access or data transfer caused by subsequent instructions is
+     initiated.
+     This is in addition to the ordering done by \co{wmb()}.
+
+     For load from persistent memory, existing read memory barriers are
+     sufficient to ensure read ordering.
+
+ \item \tco{io_stop_wc()}
+
+     For memory accesses with write-combining attributes (e.g., those returned
+     by \co{ioremap_wc()}), the CPU may wait for prior accesses to be merged
+     with subsequent ones.
+     \co{io_stop_wc()} can be used to prevent the merging of write-combining
+     memory accesses before this macro with those after it when such wait
+     has performance implications.
+\end{itemize}
+
+
+\section{Implicit kernel memory barriers}
+
+Some of the other functions in the linux kernel imply memory barriers, amongst
+which are locking and scheduling functions.
+
+This specification is a \emph{minimum} guarantee; any particular architecture
+may provide more substantial guarantees, but these may not be relied upon
+outside of arch specific code.
+
+
+\subsection{Lock acquisition functions}
+
+The Linux kernel has a number of locking constructs:
+
+\begin{itemize}
+ \item spin locks
+ \item R/W spin locks
+ \item mutexes
+ \item semaphores
+ \item R/W semaphores
+\end{itemize}
+
+In all cases there are variants on "ACQUIRE" operations and "RELEASE" operations
+for each construct.
+These operations all imply certain barriers:
+
+\begin{enumerate}
+ \item
+     ACQUIRE operation implication:
+
+     Memory operations issued after the ACQUIRE will be completed after the
+     ACQUIRE operation has completed.
+
+     Memory operations issued before the ACQUIRE may be completed after
+     the ACQUIRE operation has completed.
+
+ \item
+     RELEASE operation implication:
+
+     Memory operations issued before the RELEASE will be completed before the
+     RELEASE operation has completed.
+
+     Memory operations issued after the RELEASE may be completed before the
+     RELEASE operation has completed.
+
+ \item
+     ACQUIRE vs ACQUIRE implication:
+
+     All ACQUIRE operations issued before another ACQUIRE operation will be
+     completed before that ACQUIRE operation.
+
+ \item
+     ACQUIRE vs RELEASE implication:
+
+     All ACQUIRE operations issued before a RELEASE operation will be
+     completed before the RELEASE operation.
+
+ \item
+     Failed conditional ACQUIRE implication:
+
+     Certain locking variants of the ACQUIRE operation may fail, either due to
+     being unable to get the lock immediately, or due to receiving an unblocked
+     signal while asleep waiting for the lock to become available.
+     Failed locks do not imply any sort of barrier.
+\end{enumerate}
+
+[!] Note: one of the consequences of lock ACQUIREs and RELEASEs being only
+one-way barriers is that the effects of instructions outside of a critical
+section may seep into the inside of the critical section.
+
+An ACQUIRE followed by a RELEASE may not be assumed to be full memory barrier
+because it is possible for an access preceding the ACQUIRE to happen after the
+ACQUIRE, and an access following the RELEASE to happen before the RELEASE, and
+the two accesses can themselves then cross:
+
+\begin{VerbatimU}
+	*A = a;
+	ACQUIRE M
+	RELEASE M
+	*B = b;
+\end{VerbatimU}
+
+may occur as:
+
+\begin{VerbatimU}
+	ACQUIRE M, STORE *B, STORE *A, RELEASE M
+\end{VerbatimU}
+
+When the ACQUIRE and RELEASE are a lock acquisition and release,
+respectively, this same reordering can occur if the lock's ACQUIRE and
+RELEASE are to the same lock variable, but only from the perspective of
+another CPU not holding that lock.
+In short, a ACQUIRE followed by an RELEASE may \emph{not} be assumed to
+be a full memory barrier.
+
+Similarly, the reverse case of a RELEASE followed by an ACQUIRE does
+not imply a full memory barrier.
+Therefore, the CPU's execution of the critical sections corresponding
+to the RELEASE and the ACQUIRE can cross, so that:
+
+\begin{VerbatimU}
+	*A = a;
+	RELEASE M
+	ACQUIRE N
+	*B = b;
+\end{VerbatimU}
+
+could occur as:
+
+\begin{VerbatimU}
+	ACQUIRE N, STORE *B, STORE *A, RELEASE M
+\end{VerbatimU}
+
+It might appear that this reordering could introduce a deadlock.
+However, this cannot happen because if such a deadlock threatened,
+the RELEASE would simply complete, thereby avoiding the deadlock.
+
+\begin{quote}
+	Why does this work?
+
+	One key point is that we are only talking about the CPU doing
+	the reordering, not the compiler.
+	If the compiler (or, for that matter, the developer) switched
+	the operations, deadlock \emph{could} occur.
+
+	But suppose the CPU reordered the operations.
+	In this case, the unlock precedes the lock in the assembly code.
+	The CPU simply elected to try executing the later lock operation
+	first.
+	If there is a deadlock, this lock operation will simply spin (or
+	try to sleep, but more on that later).
+	The CPU will eventually execute the unlock operation (which
+	preceded the lock operation in the assembly code), which will
+	unravel the potential deadlock, allowing the lock operation to
+	succeed.
+
+	But what if the lock is a sleeplock?
+	In that case, the code will try to enter the scheduler, where it
+	will eventually encounter a memory barrier, which will force the
+	earlier unlock operation to complete, again unraveling the deadlock.
+	There might be a sleep-unlock race, but the locking primitive
+	needs to resolve such races properly in any case.
+
+\end{quote}
+
+Locks and semaphores may not provide any guarantee of ordering on UP compiled
+systems, and so cannot be counted on in such a situation to actually achieve
+anything at all---especially with respect to I/O accesses---unless combined
+with interrupt disabling operations.
+
+See also the section on "Inter-CPU acquiring barrier effects".
+
+
+As an example, consider the following:
+
+\begin{VerbatimU}
+	*A = a;
+	*B = b;
+	ACQUIRE
+	*C = c;
+	*D = d;
+	RELEASE
+	*E = e;
+	*F = f;
+\end{VerbatimU}
+
+The following sequence of events is acceptable:
+
+\begin{VerbatimU}
+	ACQUIRE, {*F,*A}, *E, {*C,*D}, *B, RELEASE
+
+	[+] Note that {*F,*A} indicates a combined access.
+\end{VerbatimU}
+
+But none of the following are:
+
+\begin{VerbatimU}
+	{*F,*A}, *B,   ACQUIRE, *C, *D,   RELEASE, *E
+	*A, *B, *C,    ACQUIRE, *D,       RELEASE, *E, *F
+	*A, *B,        ACQUIRE, *C,       RELEASE, *D, *E, *F
+	*B,            ACQUIRE, *C, *D,   RELEASE, {*F,*A}, *E
+\end{VerbatimU}
+
+
+\subsection{Interrupt disabling functions}
+
+Functions that disable interrupts (ACQUIRE equivalent) and enable interrupts
+(RELEASE equivalent) will act as compiler barriers only.
+So if memory or I/O barriers are required in such a situation, they must be
+provided from some other means.
+
+
+\subsection{Sleep and wake-up functions}
+
+Sleeping and waking on an event flagged in global data can be viewed as an
+interaction between two pieces of data:
+The task state of the task waiting for the event and the global data used
+to indicate the event.
+To make sure that these appear to happen in the right order, the primitives
+to begin the process of going to sleep, and the primitives to initiate a
+wake up imply certain barriers.
+
+Firstly, the sleeper normally follows something like this sequence of events:
+
+\begin{VerbatimU}
+	for (;;) {
+		set_current_state(TASK_UNINTERRUPTIBLE);
+		if (event_indicated)
+			break;
+		schedule();
+	}
+\end{VerbatimU}
+
+A general memory barrier is interpolated automatically by
+\co{set_current_state()} after it has altered the task state:
+
+\begin{VerbatimU}
+	CPU 1
+	===============================
+	set_current_state();
+	  smp_store_mb();
+	    STORE current->state
+	    <general barrier>
+	LOAD event_indicated
+\end{VerbatimU}
+
+\co{set_current_state()} may be wrapped by:
+
+\begin{VerbatimU}
+	prepare_to_wait();
+	prepare_to_wait_exclusive();
+\end{VerbatimU}
+
+which therefore also imply a general memory barrier after setting the state.
+The whole sequence above is available in various canned forms, all of which
+interpolate the memory barrier in the right place:
+
+\begin{VerbatimU}
+	wait_event();
+	wait_event_interruptible();
+	wait_event_interruptible_exclusive();
+	wait_event_interruptible_timeout();
+	wait_event_killable();
+	wait_event_timeout();
+	wait_on_bit();
+	wait_on_bit_lock();
+\end{VerbatimU}
+
+Secondly, code that performs a wake up normally follows something like this:
+
+\begin{VerbatimU}
+	event_indicated = 1;
+	wake_up(&event_wait_queue);
+\end{VerbatimU}
+
+or:
+
+\begin{VerbatimU}
+	event_indicated = 1;
+	wake_up_process(event_daemon);
+\end{VerbatimU}
+
+A general memory barrier is executed by \co{wake_up()} if it wakes something up.
+If it doesn't wake anything up then a memory barrier may or may not be
+executed; you must not rely on it.
+The barrier occurs before the task state is accessed, in particular, it sits
+between the STORE to indicate the event and the STORE to set \co{TASK_RUNNING}:
+
+\begin{VerbatimU}
+	CPU 1 (Sleeper)             CPU 2 (Waker)
+	=========================== ===============================
+	set_current_state();        STORE event_indicated
+	  smp_store_mb();           wake_up();
+	    STORE current->state      ...
+	    <general barrier>         <general barrier>
+	LOAD event_indicated          if ((LOAD task->state) & TASK_NORMAL)
+	                                STORE task->state
+\end{VerbatimU}
+
+where "task" is the thread being woken up and it equals CPU~1's "current".
+
+To repeat, a general memory barrier is guaranteed to be executed by
+\co{wake_up()} if something is actually awakened, but otherwise there is
+no such guarantee.
+To see this, consider the following sequence of events, where~X and~Y are both
+initially zero:
+
+\begin{VerbatimU}
+	CPU 1           CPU 2
+	=============== ==============
+	X = 1;          Y = 1;
+	smp_mb();       wake_up();
+	LOAD Y          LOAD X
+\end{VerbatimU}
+
+If a wakeup does occur, one (at least) of the two loads must see~1.
+If, on the other hand, a wakeup does not occur, both loads might see~0.
+
+\co{wake_up_process()} always executes a general memory barrier.
+The barrier again occurs before the task state is accessed.
+In particular, if the \co{wake_up()} in the previous snippet were replaced
+by a call to \co{wake_up_process()} then one of the two loads would be
+guaranteed to see~1.
+
+The available waker functions include:
+
+\begin{VerbatimU}
+	complete();
+	wake_up();
+	wake_up_all();
+	wake_up_bit();
+	wake_up_interruptible();
+	wake_up_interruptible_all();
+	wake_up_interruptible_nr();
+	wake_up_interruptible_poll();
+	wake_up_interruptible_sync();
+	wake_up_interruptible_sync_poll();
+	wake_up_locked();
+	wake_up_locked_poll();
+	wake_up_nr();
+	wake_up_poll();
+	wake_up_process();
+\end{VerbatimU}
+
+In terms of memory ordering, these functions all provide the same guarantees of
+a \co{wake_up()} (or stronger).
+
+[!] Note that the memory barriers implied by the sleeper and the waker do
+\emph{not} order multiple stores before the wake-up with respect to loads
+of those stored values after the sleeper has called \co{set_current_state()}.
+For instance, if the sleeper does:
+
+\begin{VerbatimU}
+	set_current_state(TASK_INTERRUPTIBLE);
+	if (event_indicated)
+		break;
+	__set_current_state(TASK_RUNNING);
+	do_something(my_data);
+\end{VerbatimU}
+
+and the waker does:
+
+\begin{VerbatimU}
+	my_data = value;
+	event_indicated = 1;
+	wake_up(&event_wait_queue);
+\end{VerbatimU}
+
+there's no guarantee that the change to \co{event_indicated} will be
+perceived by the sleeper as coming after the change to \co{my_data}.
+In such a circumstance, the code on both sides must interpolate its own
+memory barriers between the separate data accesses.
+Thus the above sleeper ought to do:
+
+\begin{VerbatimU}
+	set_current_state(TASK_INTERRUPTIBLE);
+	if (event_indicated) {
+		smp_rmb();
+		do_something(my_data);
+	}
+\end{VerbatimU}
+
+and the waker should do:
+
+\begin{VerbatimU}
+	my_data = value;
+	smp_wmb();
+	event_indicated = 1;
+	wake_up(&event_wait_queue);
+\end{VerbatimU}
+
+\subsection{Miscellaneous functions}
+
+Other functions that imply barriers:
+
+\begin{itemize}
+ \item \co{schedule()} and similar imply full memory barriers.
+\end{itemize}
+
+
+\section{Inter-CPU acquiring barrier effects}
+
+On SMP systems locking primitives give a more substantial form of barrier:
+One that does affect memory access ordering on other CPUs, within the
+context of conflict on any particular lock.
+
+
+\subsection{Acquires vs memory accesses}
+
+Consider the following:
+The system has a pair of spinlocks (M) and (Q), and three CPUs; then
+should the following sequence of events occur:
+
+\begin{VerbatimU}
+	CPU 1                   CPU 2
+	======================= =======================
+	WRITE_ONCE(*A, a);      WRITE_ONCE(*E, e);
+	ACQUIRE M               ACQUIRE Q
+	WRITE_ONCE(*B, b);      WRITE_ONCE(*F, f);
+	WRITE_ONCE(*C, c);      WRITE_ONCE(*G, g);
+	RELEASE M               RELEASE Q
+	WRITE_ONCE(*D, d);      WRITE_ONCE(*H, h);
+\end{VerbatimU}
+
+Then there is no guarantee as to what order CPU~3 will see the accesses
+to~\co{*A} through~\co{*H} occur in, other than the constraints imposed by
+the separate locks on the separate CPUs.
+It might, for example, see:
+
+\begin{VerbatimU}[tabsize=1]
+	*E, ACQUIRE M, ACQUIRE Q, *G, *C, *F, *A, *B, RELEASE Q, *D, *H, RELEASE M
+\end{VerbatimU}
+
+But it won't see any of:
+
+\begin{VerbatimU}
+	*B, *C or *D preceding ACQUIRE M
+	*A, *B or *C following RELEASE M
+	*F, *G or *H preceding ACQUIRE Q
+	*E, *F or *G following RELEASE Q
+\end{VerbatimU}
+
+
+\section{Where are memory barriers needed?}
+
+Under normal operation, memory operation reordering is generally not going to
+be a problem as a single-threaded linear piece of code will still appear to
+work correctly, even if it's in an SMP kernel.
+There are, however, four circumstances in which reordering definitely
+\emph{could} be a problem:
+
+\begin{itemize}
+ \item Interprocessor interaction.
+ \item Atomic operations.
+ \item Accessing devices.
+ \item Interrupts.
+\end{itemize}
+
+\subsection{Interprocessor interaction}
+
+When there's a system with more than one processor, more than one CPU in the
+system may be working on the same data set at the same time.
+This can cause synchronisation problems, and the usual way of dealing with
+them is to use locks.
+Locks, however, are quite expensive, and so it may be preferable to operate
+without the use of a lock if at all possible.
+In such a case, operations that affect both CPUs may have to be carefully
+ordered to prevent a malfunction.
+
+Consider, for example, the R/W semaphore slow path.
+Here a waiting process is queued on the semaphore, by virtue of it having
+a piece of its stack linked to the semaphore's list of waiting processes:
+
+\begin{VerbatimU}
+	struct rw_semaphore {
+		...
+		spinlock_t lock;
+		struct list_head waiters;
+	};
+
+	struct rwsem_waiter {
+		struct list_head list;
+		struct task_struct *task;
+	};
+\end{VerbatimU}
+
+To wake up a particular waiter, the \co{up_read()} or \co{up_write()}
+functions have to:
+
+\begin{enumerate}
+ \item
+     read the next pointer from this waiter's record to know as to where the
+     next waiter record is;
+
+ \item
+     read the pointer to the waiter's task structure;
+
+ \item
+     clear the task pointer to tell the waiter it has been given the semaphore;
+
+ \item
+     call \co{wake_up_process()} on the task; and
+
+ \item
+     release the reference held on the waiter's task struct.
+\end{enumerate}
+
+In other words, it has to perform this sequence of events:
+
+\begin{VerbatimU}
+	LOAD waiter->list.next;
+	LOAD waiter->task;
+	STORE waiter->task;
+	CALL wakeup
+	RELEASE task
+\end{VerbatimU}
+
+and if any of these steps occur out of order, then the whole thing may
+malfunction.
+
+Once it has queued itself and dropped the semaphore lock, the waiter does not
+get the lock again; it instead just waits for its task pointer to be cleared
+before proceeding.
+Since the record is on the waiter's stack, this means that if the task
+pointer is cleared \emph{before} the next pointer in the list is read,
+another CPU might start processing the waiter and might clobber the waiter's
+stack before the \co{up*()} function has a chance to read the next pointer.
+
+Consider then what might happen to the above sequence of events:
+
+\begin{VerbatimU}
+	CPU 1                           CPU 2
+	===============================	===============================
+	                                down_xxx()
+	                                Queue waiter
+	                                Sleep
+	up_yyy()
+	LOAD waiter->task;
+	STORE waiter->task;
+	                                Woken up by other event
+	<preempt>
+	                                Resume processing
+	                                down_xxx() returns
+	                                call foo()
+	                                foo() clobbers *waiter
+	</preempt>
+	LOAD waiter->list.next;
+	--- OOPS ---
+\end{VerbatimU}
+
+This could be dealt with using the semaphore lock, but then the \co{down_xxx()}
+function has to needlessly get the spinlock again after being woken up.
+
+The way to deal with this is to insert a general SMP memory barrier:
+
+\begin{VerbatimU}
+	LOAD waiter->list.next;
+	LOAD waiter->task;
+	smp_mb();
+	STORE waiter->task;
+	CALL wakeup
+	RELEASE task
+\end{VerbatimU}
+
+In this case, the barrier makes a guarantee that all memory accesses before the
+barrier will appear to happen before all the memory accesses after the barrier
+with respect to the other CPUs on the system.
+It does \emph{not} guarantee that all the memory accesses before the barrier
+will be complete by the time the barrier instruction itself is complete.
+
+On a UP system---where this wouldn't be a problem---the \co{smp_mb()} is just a
+compiler barrier, thus making sure the compiler emits the instructions in the
+right order without actually intervening in the CPU.
+Since there's only one CPU, that CPU's dependency ordering logic will take
+care of everything else.
+
+\subsection{Atomic operations}
+
+While they are technically interprocessor interaction considerations, atomic
+operations are noted specially as some of them imply full memory barriers and
+some don't, but they're very heavily relied on as a group throughout the
+kernel.
+
+See \path{Documentation/atomic_t.txt} for more information.
+
+\subsection{Accessing devices}
+
+Many devices can be memory mapped, and so appear to the CPU as if they're just
+a set of memory locations.
+To control such a device, the driver usually has to make the right memory
+accesses in exactly the right order.
+
+However, having a clever CPU or a clever compiler creates a potential problem
+in that the carefully sequenced accesses in the driver code won't reach the
+device in the requisite order if the CPU or the compiler thinks it is more
+efficient to reorder, combine or merge accesses---something that would cause
+the device to malfunction.
+
+Inside of the Linux kernel, I/O should be done through the appropriate accessor
+routines---such as \co{inb()} or \co{writel()}---which know how to make such
+accesses appropriately sequential.
+While this, for the most part, renders the explicit use of memory barriers
+unnecessary, if the accessor functions are used to refer to an I/O memory
+window with relaxed memory access properties, then \emph{mandatory} memory
+barriers are required to enforce ordering.
+
+See \path{Documentation/driver-api/device-io.rst} for more information.
+
+
+\subsection{Interrupts}
+
+A driver may be interrupted by its own interrupt service routine, and thus the
+two parts of the driver may interfere with each other's attempts to control or
+access the device.
+
+This may be alleviated---at least in part---by disabling local interrupts (a
+form of locking), such that the critical operations are all contained within
+the interrupt-disabled section in the driver.
+While the driver's interrupt routine is executing, the driver's core may
+not run on the same CPU, and its interrupt is not permitted to happen again
+until the current interrupt has been handled, thus the interrupt handler
+does not need to lock against that.
+
+However, consider a driver that was talking to an ethernet card that sports an
+address register and a data register.
+If that driver's core talks to the card under interrupt-disablement and then
+the driver's interrupt handler is invoked:
+
+\begin{VerbatimU}
+	LOCAL IRQ DISABLE
+	writew(ADDR, 3);
+	writew(DATA, y);
+	LOCAL IRQ ENABLE
+	<interrupt>
+	writew(ADDR, 4);
+	q = readw(DATA);
+	</interrupt>
+\end{VerbatimU}
+
+The store to the data register might happen after the second store to the
+address register if ordering rules are sufficiently relaxed:
+
+\begin{VerbatimU}
+	STORE *ADDR = 3, STORE *ADDR = 4, STORE *DATA = y, q = LOAD *DATA
+\end{VerbatimU}
+
+If ordering rules are relaxed, it must be assumed that accesses done inside an
+interrupt disabled section may leak outside of it and may interleave with
+accesses performed in an interrupt---and vice versa---unless implicit or
+explicit barriers are used.
+
+Normally this won't be a problem because the I/O accesses done inside such
+sections will include synchronous load operations on strictly ordered I/O
+registers that form implicit I/O barriers.
+
+
+A similar situation may occur between an interrupt routine and two routines
+running on separate CPUs that communicate with each other.
+If such a case is likely, then interrupt-disabling locks should be used to
+guarantee ordering.
+
+
+\section{Kernel I/O barrier effects}
+
+Interfacing with peripherals via I/O accesses is deeply architecture and device
+specific.
+Therefore, drivers which are inherently non-portable may rely on specific
+behaviours of their target systems in order to achieve synchronization
+in the most lightweight manner possible.
+For drivers intending to be portable between multiple architectures and
+bus implementations, the kernel offers a series of accessor functions that
+provide various degrees of ordering guarantees:
+
+\begin{description}
+ \item[\tco{readX()}, \tco{writeX()}:]
+	The \co{readX()} and \co{writeX()} MMIO accessors take a pointer to
+	the peripheral being accessed as an \co{__iomem *} parameter.
+	For pointers mapped with the default I/O attributes (e.g., those
+        returned by \co{ioremap()}), the ordering guarantees are as follows:
+
+	\begin{enumerate}
+	 \item
+	   All \co{readX()} and \co{writeX()} accesses to the same peripheral
+	   are ordered with respect to each other.
+	   This ensures that MMIO register accesses by the same CPU thread to
+	   a particular device will arrive in program order.
+
+	 \item
+	   A \co{writeX()} issued by a CPU thread holding a spinlock is ordered
+	   before a \co{writeX()} to the same peripheral from another CPU thread
+	   issued after a later acquisition of the same spinlock.
+	   This ensures that MMIO register writes to a particular device
+	   issued while holding a spinlock will arrive in an order consistent
+	   with acquisitions of the lock.
+
+	 \item
+	   A \co{writeX()} by a CPU thread to the peripheral will first wait
+	   for the completion of all prior writes to memory either issued by, or
+	   propagated to, the same thread.
+	   This ensures that writes by the CPU to an outbound DMA buffer
+	   allocated by \co{dma_alloc_coherent()} will be visible to a DMA
+	   engine when the CPU writes to its MMIO control register to trigger
+	   the transfer.
+
+	 \item
+	   A \co{readX()} by a CPU thread from the peripheral will complete
+	   before any subsequent reads from memory by the same thread can begin.
+	   This ensures that reads by the CPU from an incoming DMA buffer
+	   allocated by \co{dma_alloc_coherent()} will not see stale data
+	   after reading from the DMA engine's MMIO status register to
+	   establish that the DMA transfer has completed.
+
+	 \item
+	   A \co{readX()} by a CPU thread from the peripheral will complete
+	   before any subsequent \co{delay()} loop can begin execution on the
+	   same thread.
+	   This ensures that two MMIO register writes by the CPU to a peripheral
+	   will arrive at least 1us apart if the first write is immediately read
+	   back with \co{readX()} and \co{udelay(1)} is called prior to the
+	   second \co{writeX()}:
+
+\begin{VerbatimU}[tabsize=1]
+		writel(42, DEVICE_REGISTER_0); // Arrives at the device...
+		readl(DEVICE_REGISTER_0);
+		udelay(1);
+		writel(42, DEVICE_REGISTER_1); // ...at least 1us before this.
+\end{VerbatimU}
+	\end{enumerate}
+
+	The ordering properties of \co{__iomem} pointers obtained with
+	non-default attributes (e.g., those returned by \co{ioremap_wc()})
+	are specific to the underlying architecture and therefore the
+	guarantees listed above cannotgenerally be relied upon for accesses
+	to these types of mappings.
+
+ \item[\tco{readX_relaxed()}, \tco{writeX_relaxed()}:]
+
+	These are similar to \co{readX()} and \co{writeX()}, but provide
+	weaker memory ordering guarantees.
+	Specifically, they do not guarantee ordering with respect to locking,
+	normal memory accesses or \co{delay()} loops (i.e.,
+	bullets 2--5 above) but they are still guaranteed to be ordered with
+	respect to other accesses from the same CPU thread to the same
+	peripheral when operating on \co{__iomem} pointers mapped with the
+        default I/O attributes.
+
+ \item[\tco{readsX()}, \tco{writesX()}:]
+
+	The \co{readsX()} and \co{writesX()} MMIO accessors are designed for
+	accessing register-based, memory-mapped FIFOs residing on peripherals
+	that are not capable of performing DMA\@.
+	Consequently, they provide only the ordering guarantees of
+	\co{readX_relaxed()} and \co{writeX_relaxed()}, as documented above.
+
+ \item[\tco{inX()}, \tco{outX()}:]
+
+	The \co{inX()} and \co{outX()} accessors are intended to access legacy
+	port-mapped I/O peripherals, which may require special instructions
+	on some architectures (notably x86).
+	The port number of the peripheral being accessed is passed as an
+	argument.
+
+	Since many CPU architectures ultimately access these peripherals via an
+	internal virtual memory mapping, the portable ordering guarantees
+	provided by \co{inX()} and \co{outX()} are the same as those provided
+	by \co{readX()} and \co{writeX()} respectively when accessing a
+	mapping with the default I/O attributes.
+
+	Device drivers may expect \co{outX()} to emit a non-posted write
+	transaction that waits for a completion response from the I/O
+	peripheral before returning.
+	This is not guaranteed by all architectures and is therefore not
+	part of the portable ordering semantics.
+
+ \item[\tco{insX()}, \tco{outsX()}:]
+
+	As above, the \co{insX()} and \co{outsX()} accessors provide the same
+	ordering guarantees as \co{readsX()} and \co{writesX()} respectively
+	when accessing a mapping with the default I/O attributes.
+
+ \item[\tco{ioreadX()}, \tco{iowriteX()}:]
+
+	These will perform appropriately for the type of access they're actually
+	doing, be it \co{inX()}/\co{outX()} or \co{readX()}/\co{writeX()}.
+\end{description}
+
+With the exception of the string accessors (\co{insX()}, \co{outsX()},
+\co{readsX()} and \co{writesX()}), all of the above assume that the underlying
+peripheral is little-endian and will therefore perform byte-swapping
+operations on big-endian architectures.
+
+
+\section{Assumed minimum execution ordering model}
+
+It has to be assumed that the conceptual CPU is weakly-ordered but that it will
+maintain the appearance of program causality with respect to itself.
+Some CPUs (such as i386 or \co{x86_64}) are more constrained than others
+(such as powerpc or frv), and so the most relaxed case (namely DEC Alpha)
+must be assumed outside of arch-specific code.
+
+This means that it must be considered that the CPU will execute its instruction
+stream in any order it feels like---or even in parallel---provided that if an
+instruction in the stream depends on an earlier instruction, then that
+earlier instruction must be sufficiently complete\footnote{
+	Some instructions have more than one effect---such as changing the
+	condition codes, changing registers or changing memory---and
+	different instructions may depend on different effects.}
+before the later instruction may proceed; in other words, provided that the
+appearance of causality is maintained.
+
+A CPU may also discard any instruction sequence that winds up having no
+ultimate effect.
+For example, if two adjacent instructions both load an immediate value
+into the same register, the first may be discarded.
+
+
+Similarly, it has to be assumed that compiler might reorder the instruction
+stream in any way it sees fit, again provided the appearance of causality is
+maintained.
+
+
+\section{The effects of the CPU cache}
+
+The way cached memory operations are perceived across the system is affected to
+a certain extent by the caches that lie between CPUs and memory, and by the
+memory coherence system that maintains the consistency of state in the system.
+
+As far as the way a CPU interacts with another part of the system through the
+caches goes, the memory system has to include the CPU's caches, and memory
+barriers for the most part act at the interface between the CPU and its cache
+(memory barriers logically act on the dotted line in the following diagram):
+
+\begin{VerbatimU}[tabsize=1]
+	    <--- CPU --->         :       <----------- Memory ----------->
+	                          :
+	+--------+    +--------+  :   +--------+    +-----------+
+	|        |    |        |  :   |        |    |           |    +--------+
+	|  CPU   |    | Memory |  :   | CPU    |    |           |    |        |
+	|  Core  |--->| Access |----->| Cache  |<-->|           |    |        |
+	|        |    | Queue  |  :   |        |    |           |--->| Memory |
+	|        |    |        |  :   |        |    |           |    |        |
+	+--------+    +--------+  :   +--------+    |           |    |        |
+	                          :                 | Cache     |    +--------+
+	                          :                 | Coherency |
+	                          :                 | Mechanism |    +--------+
+	+--------+    +--------+  :   +--------+    |           |    |        |
+	|        |    |        |  :   |        |    |           |    |        |
+	|  CPU   |    | Memory |  :   | CPU    |    |           |--->| Device |
+	|  Core  |--->| Access |----->| Cache  |<-->|           |    |        |
+	|        |    | Queue  |  :   |        |    |           |    |        |
+	|        |    |        |  :   |        |    |           |    +--------+
+	+--------+    +--------+  :   +--------+    +-----------+
+	                          :
+	                          :
+\end{VerbatimU}
+
+Although any particular load or store may not actually appear outside of the
+CPU that issued it since it may have been satisfied within the CPU's own cache,
+it will still appear as if the full memory access had taken place as far as the
+other CPUs are concerned since the cache coherency mechanisms will migrate the
+cacheline over to the accessing CPU and propagate the effects upon conflict.
+
+The CPU core may execute instructions in any order it deems fit, provided the
+expected program causality appears to be maintained.  Some of the instructions
+generate load and store operations which then go into the queue of memory
+accesses to be performed.  The core may place these in the queue in any order
+it wishes, and continue execution until it is forced to wait for an instruction
+to complete.
+
+What memory barriers are concerned with is controlling the order in which
+accesses cross from the CPU side of things to the memory side of things, and
+the order in which the effects are perceived to happen by the other observers
+in the system.
+
+[!] Memory barriers are \emph{not} needed within a given CPU, as CPUs always see
+their own loads and stores as if they had happened in program order.
+
+[!] MMIO or other device accesses may bypass the cache system.
+This depends on the properties of the memory window through which devices
+are accessed and/or the use of any special device communication instructions
+the CPU may have.
+
+
+\subsection{Cache coherency vs DMA}
+
+Not all systems maintain cache coherency with respect to devices doing DMA\@.
+In such cases, a device attempting DMA may obtain stale data from RAM because
+dirty cache lines may be resident in the caches of various CPUs, and may not
+have been written back to RAM yet.
+To deal with this, the appropriate part of the kernel must flush the
+overlapping bits of cache on each CPU (and maybe invalidate them as well).
+
+In addition, the data DMA'd to RAM by a device may be overwritten by dirty
+cache lines being written back to RAM from a CPU's cache after the device has
+installed its own data, or cache lines present in the CPU's cache may simply
+obscure the fact that RAM has been updated, until at such time as the cacheline
+is discarded from the CPU's cache and reloaded.
+To deal with this, the appropriate part of the kernel must invalidate the
+overlapping bits of the cache on each CPU.
+
+See \path{Documentation/core-api/cachetlb.rst} for more information
+on cache management.
+
+
+\subsection{Cache coherency vs MMIO}
+
+Memory mapped I/O usually takes place through memory locations that are part of
+a window in the CPU's memory space that has different properties assigned than
+the usual RAM directed window.
+
+Amongst these properties is usually the fact that such accesses bypass the
+caching entirely and go directly to the device buses.
+This means MMIO accesses may, in effect, overtake accesses to cached memory
+that were emitted earlier.
+A memory barrier isn't sufficient in such a case, but rather the cache must be
+flushed between the cached memory write and the MMIO access if the two are in
+any way dependent.
+
+
+\section{The things CPUs get up to}
+
+A programmer might take it for granted that the CPU will perform memory
+operations in exactly the order specified, so that if the CPU is, for example,
+given the following piece of code to execute:
+
+\begin{VerbatimU}
+	a = READ_ONCE(*A);
+	WRITE_ONCE(*B, b);
+	c = READ_ONCE(*C);
+	d = READ_ONCE(*D);
+	WRITE_ONCE(*E, e);
+\end{VerbatimU}
+
+they would then expect that the CPU will complete the memory operation for each
+instruction before moving on to the next one, leading to a definite sequence of
+operations as seen by external observers in the system:
+
+\begin{VerbatimU}
+	LOAD *A, STORE *B, LOAD *C, LOAD *D, STORE *E.
+\end{VerbatimU}
+
+Reality is, of course, much messier.
+With many CPUs and compilers, the above assumption doesn't hold because:
+
+\begin{itemize}
+ \item
+     loads are more likely to need to be completed immediately to permit
+     execution progress, whereas stores can often be deferred without a
+     problem;
+
+ \item
+     loads may be done speculatively, and the result discarded should it prove
+     to have been unnecessary;
+
+ \item
+     loads may be done speculatively, leading to the result having been fetched
+     at the wrong time in the expected sequence of events;
+
+ \item
+     the order of the memory accesses may be rearranged to promote better use
+     of the CPU buses and caches;
+
+ \item
+     loads and stores may be combined to improve performance when talking to
+     memory or I/O hardware that can do batched accesses of adjacent locations,
+     thus cutting down on transaction setup costs (memory and PCI devices may
+     both be able to do this); and
+
+ \item
+     the CPU's data cache may affect the ordering, and while cache-coherency
+     mechanisms may alleviate this---once the store has actually hit the
+     cache---there's no guarantee that the coherency management will be
+     propagated in order to other CPUs.
+\end{itemize}
+
+So what another CPU, say, might actually observe from the above piece of code
+is:
+
+\begin{VerbatimU}
+	LOAD *A, ..., LOAD {*C,*D}, STORE *E, STORE *B
+
+	(Where "LOAD {*C,*D}" is a combined load)
+\end{VerbatimU}
+
+However, it is guaranteed that a CPU will be self-consistent: it will see its
+\emph{own} accesses appear to be correctly ordered, without the need for a
+memory barrier.
+For instance with the following code:
+
+\begin{VerbatimU}
+	U = READ_ONCE(*A);
+	WRITE_ONCE(*A, V);
+	WRITE_ONCE(*A, W);
+	X = READ_ONCE(*A);
+	WRITE_ONCE(*A, Y);
+	Z = READ_ONCE(*A);
+\end{VerbatimU}
+
+and assuming no intervention by an external influence, it can be assumed that
+the final result will appear to be:
+
+\begin{VerbatimU}
+	U == the original value of *A
+	X == W
+	Z == Y
+	*A == Y
+\end{VerbatimU}
+
+The code above may cause the CPU to generate the full sequence of memory
+accesses:
+
+\begin{VerbatimU}
+	U=LOAD *A, STORE *A=V, STORE *A=W, X=LOAD *A, STORE *A=Y, Z=LOAD *A
+\end{VerbatimU}
+
+in that order, but, without intervention, the sequence may have almost any
+combination of elements combined or discarded, provided the program's view
+of the world remains consistent.
+Note that \co{READ_ONCE()} and \co{WRITE_ONCE()} are \emph{not} optional
+in the above example, as there are architectures where a given CPU might
+reorder successive loads to the same location.
+On such architectures, \co{READ_ONCE()} and \co{WRITE_ONCE()} do whatever is
+necessary to prevent this, for example, on Itanium the volatile casts
+used by \co{READ_ONCE()} and \co{WRITE_ONCE()} cause GCC to emit the special
+\co{ld.acq} and \co{st.rel} instructions (respectively) that prevent such
+reordering.
+
+The compiler may also combine, discard or defer elements of the sequence before
+the CPU even sees them.
+
+For instance:
+
+\begin{VerbatimU}
+	*A = V;
+	*A = W;
+\end{VerbatimU}
+
+may be reduced to:
+
+\begin{VerbatimU}
+	*A = W;
+\end{VerbatimU}
+
+since, without either a write barrier or an \co{WRITE_ONCE()}, it can be
+assumed that the effect of the storage of~\co{V} to~\co{*A} is lost.
+Similarly:
+
+\begin{VerbatimU}
+	*A = Y;
+	Z = *A;
+\end{VerbatimU}
+
+may, without a memory barrier or an \co{READ_ONCE()} and \co{WRITE_ONCE()}, be
+reduced to:
+
+\begin{VerbatimU}
+	*A = Y;
+	Z = Y;
+\end{VerbatimU}
+
+and the LOAD operation never appear outside of the CPU.
+
+
+\subsection{And then there's the Alpha}
+
+The DEC Alpha CPU is one of the most relaxed CPUs there is.
+Not only that, some versions of the Alpha CPU have a split data cache,
+permitting them to have two semantically-related cache lines updated at
+separate times.
+This is where the address-dependency barrier really becomes necessary as
+this synchronises both caches with the memory coherence system, thus making
+it seem like pointer changes vs new data occur in the right order.
+
+The Alpha defines the Linux kernel's memory model, although as of v4.15
+the Linux kernel's addition of \co{smp_mb()} to \co{READ_ONCE()} on Alpha
+greatly reduced its impact on the memory model.
+
+
+\subsection{Virtual machine guests}
+
+Guests running within virtual machines might be affected by SMP effects even if
+the guest itself is compiled without SMP support.
+This is an artifact of interfacing with an SMP host while running an UP kernel.
+Using mandatory barriers for this use-case would be possible but is often
+suboptimal.
+
+To handle this case optimally, low-level \co{virt_mb()} etc macros are
+available.
+These have the same effect as \co{smp_mb()} etc when SMP is enabled, but
+generate identical code for SMP and non-SMP systems.
+For example, virtual machine guests should use \co{virt_mb()} rather than
+\co{smp_mb()} when synchronizing against a (possibly SMP) host.
+
+These are equivalent to \co{smp_mb()} etc counterparts in all other respects,
+in particular, they do not control MMIO effects:
+To control MMIO effects, use mandatory barriers.
+
+
+\section{Example uses}
+
+\subsection{Circular buffers}
+
+Memory barriers can be used to implement circular buffering without the need
+of a lock to serialise the producer with the consumer.
+See \path{Documentation/core-api/circular-buffers.rst} for details.
+
+
+\section{References}
+
+\footnotesize
+\begin{itemize}
+\item
+Alpha AXP Architecture Reference Manual, Second Edition (Sites \& Witek,
+Digital Press)
+  \begin{itemize}
+    \item
+	Chapter 5.2: Physical Address Space Characteristics
+    \item
+	Chapter 5.4: Caches and Write Buffers
+    \item
+	Chapter 5.5: Data Sharing
+    \item
+	Chapter 5.6: Read/Write Ordering
+  \end{itemize}
+
+\item
+AMD64 Architecture Programmer's Manual Volume 2: System Programming
+  \begin{itemize}
+    \item
+	Chapter 7.1: Memory-Access Ordering
+    \item
+	Chapter 7.4: Buffering and Combining Memory Writes
+  \end{itemize}
+       
+\item
+ARM Architecture Reference Manual (ARMv8, for ARMv8-A architecture profile)
+  \begin{itemize}
+    \item
+	Chapter B2: The AArch64 Application Level Memory Model
+  \end{itemize}
+
+\item
+IA-32 Intel Architecture Software Developer's Manual, Volume 3:
+System Programming Guide
+  \begin{itemize}
+    \item
+	Chapter 7.1: Locked Atomic Operations
+    \item
+	Chapter 7.2: Memory Ordering
+    \item
+	Chapter 7.4: Serializing Instructions
+  \end{itemize}
+
+\item
+The SPARC Architecture Manual, Version 9
+  \begin{itemize}
+    \item
+	Chapter 8: Memory Models
+    \item
+	Appendix D: Formal Specification of the Memory Models
+    \item
+	Appendix J: Programming with the Memory Models
+  \end{itemize}
+
+\item
+Storage in the PowerPC (Stone and Fitzgerald)
+
+\item
+UltraSPARC Programmer Reference Manual
+  \begin{itemize}
+    \item
+	Chapter 5: Memory Accesses and Cacheability
+    \item
+	Chapter 15: Sparc-V9 Memory Models
+  \end{itemize}
+
+\item
+UltraSPARC III Cu User's Manual
+  \begin{itemize}
+    \item
+	Chapter 9: Memory Models
+  \end{itemize}
+
+\item
+UltraSPARC IIIi Processor User's Manual
+  \begin{itemize}
+    \item
+	Chapter 8: Memory Models
+  \end{itemize}
+
+\item
+UltraSPARC Architecture 2005
+  \begin{itemize}
+    \item
+	Chapter 9: Memory
+    \item
+	Appendix D: Formal Specifications of the Memory Models
+  \end{itemize}
+
+\item
+UltraSPARC T1 Supplement to the UltraSPARC Architecture 2005
+  \begin{itemize}
+    \item
+	Chapter 8: Memory Models
+    \item
+	Appendix F: Caches and Cache Coherency
+  \end{itemize}
+
+\item
+Solaris Internals, Core Kernel Architecture, p63--68:
+  \begin{itemize}
+    \item
+	Chapter 3.3: Hardware Considerations for Locks and
+			Synchronization
+  \end{itemize}
+
+\item
+Unix Systems for Modern Architectures, Symmetric Multiprocessing and Caching
+for Kernel Programmers:
+  \begin{itemize}
+    \item
+	Chapter 13: Other Memory Models
+  \end{itemize}
+
+\item
+Intel Itanium Architecture Software Developer's Manual: Volume 1:
+  \begin{itemize}
+    \item
+	Section 2.6: Speculation
+    \item
+	Section 4.4: Memory Access
+  \end{itemize}
+\end{itemize}

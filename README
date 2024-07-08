@@ -1,0 +1,14 @@
+This directory contains Linux kernel's LKMM (Linum Kernel Memory Consistency
+Model) related documents, which are manually transformed into perfbook's
+LaTeX typesetting framework [1].
+
+List of included documents (from Linux -rcu repository [2]):
+
+ - Documentation/memory-barriers.txt
+ - tools/memory-model/README
+ - tools/memory-model/Documentation/README
+ - tools/memory-model/Documentation/*.txt
+ - Documentation/litmus-tests/README
+ 
+[1]: git://git.kernel.org/pub/scm/linux/kernel/git/paulmck/perfbook.git
+[2]: git://git.kernel.org/pub/scm/linux/kernel/git/paulmck/linux-rcu.git
