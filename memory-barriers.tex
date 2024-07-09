@@ -382,19 +382,23 @@ Memory barriers come in four basic varieties:
      All stores \emph{before} a write barrier will occur \emph{before} all
      the stores after the write barrier.
 
-     [!] Note that write barriers should normally be paired with read or
+     \begin{Note}
+     Note that write barriers should normally be paired with read or
      address-dependency barriers; see \cref{sec:SMP barrier pairing}.
+     \end{Note}
 
 
  \item
      Address-dependency barriers (HISTORICAL).
 
-     [!] This section is marked as HISTORICAL\@:
+     \begin{Note}
+     This section is marked as HISTORICAL\@:
      It covers the long-obsolete \co{smp_read_barrier_depends()} macro,
      the semantics of which are now implicit in all marked accesses.
      For more up-to-date information, including how compiler transformations
      can sometimes break address dependencies, see
      \path{Documentation/RCU/rcu_dereference.rst}.
+     \end{Note}
 
      An address-dependency barrier is a weaker form of read barrier.
      In the case where two loads are performed such that the second depends
@@ -421,22 +425,28 @@ Memory barriers come in four basic varieties:
      See \cref{sec:Examples of memory barrier sequences} subsection for diagrams
      showing the ordering constraints.
 
-     [!] Note that the first load really has to have an \emph{address}
+     \begin{Note}
+     Note that the first load really has to have an \emph{address}
      dependency and not a control dependency.
      If the address for the second load is dependent on the first load,
      but the dependency is through a conditional rather than actually
      loading the address itself, then it's a \emph{control} dependency and
      a full read barrier or better is required.
      See \cref{sec:Control dependencies} for more information.
+     \end{Note}
 
-     [!] Note that address-dependency barriers should normally be paired with
+     \begin{Note}
+     Note that address-dependency barriers should normally be paired with
      write barriers; see \cref{sec:SMP barrier pairing}.
+     \end{Note}
 
-     [!] Kernel release v5.9 removed kernel APIs for explicit
+     \begin{Note}
+     Kernel release v5.9 removed kernel APIs for explicit
      address-dependency barriers.
      Nowadays, APIs for marking loads from shared variables such as
      \co{READ_ONCE()} and \co{rcu_dereference()} provide implicit
      address-dependency barriers.
+     \end{Note}
 
  \item
      Read (or load) memory barriers.
@@ -452,8 +462,10 @@ Memory barriers come in four basic varieties:
      Read memory barriers imply address-dependency barriers, and so can
      substitute for them.
 
-     [!] Note that read barriers should normally be paired with write barriers;
+     \begin{Note}
+     Note that read barriers should normally be paired with write barriers;
      see \cref{sec:SMP barrier pairing}.
+     \end{Note}
 
 
  \item
@@ -575,12 +587,14 @@ There are certain things that the Linux kernel memory barriers do not guarantee:
 
 \subsection{Address-dependency barriers (HISTORICAL)}
 
-[!] This section is marked as HISTORICAL\@:
+\begin{Note}
+This section is marked as HISTORICAL\@:
 It covers the long-obsolete \co{smp_read_barrier_depends()} macro, the
 semantics of which are now implicit in all marked accesses.
 For more up-to-date information, including how compiler transformations
 can sometimes break address dependencies, see
 \path{Documentation/RCU/rcu_dereference.rst}.
+\end{Note}
 
 As of v4.15 of the Linux kernel, an \co{smp_mb()} was added to
 \co{READ_ONCE()} for DEC Alpha, which means that about the only people who
@@ -589,9 +603,11 @@ architecture-specific code and those working on \co{READ_ONCE()} itself.
 For those who need it, and for those who are interested in the history,
 here is the story of address-dependency barriers.
 
-[!] While address dependencies are observed in both load-to-load and
+\begin{Note}
+While address dependencies are observed in both load-to-load and
 load-to-store relations, address-dependency barriers are not necessary
 for load-to-store situations.
+\end{Note}
 
 The requirement of address-dependency barriers is a little subtle, and
 it's not always obvious that they're needed.
@@ -608,8 +624,10 @@ To illustrate, consider the following sequence of events:
 	                      D = *Q;
 \end{VerbatimU}
 
-[!] \co{READ_ONCE_OLD()} corresponds to \co{READ_ONCE()} of
+\begin{Note}
+\co{READ_ONCE_OLD()} corresponds to \co{READ_ONCE()} of
 pre-4.15 kernel, which doesn't imply an address-dependency barrier.
+\end{Note}
 
 There's a clear address dependency here, and it would seem that by the end of
 the sequence, \co{Q} must be either~\co{&A} or~\co{&B}, and that:
@@ -651,7 +669,8 @@ This enforces the occurrence of one of the two implications, and prevents the
 third possibility from arising.
 
 
-[!] Note that this extremely counterintuitive situation arises most easily on
+\begin{Note}
+Note that this extremely counterintuitive situation arises most easily on
 machines with split caches, so that, for example, one cache bank processes
 even-numbered cache lines and the other bank processes odd-numbered cache
 lines.
@@ -660,6 +679,7 @@ variable~\co{B} might be stored in an even-numbered cache line.
 Then, if the even-numbered bank of the reading CPU's cache is extremely
 busy while the odd-numbered bank is idle, one can see the new value of
 the pointer~\co{P} (\co{&B}), but the old value of the variable~\co{B} (2).
+\end{Note}
 
 
 An address-dependency barrier is not required to order dependent writes
@@ -1080,7 +1100,8 @@ Or even:
 Basically, the read barrier always has to be there, even though it can be of
 the ``weaker'' type.
 
-[!] Note that the stores before the write barrier would normally be expected to
+\begin{Note}
+Note that the stores before the write barrier would normally be expected to
 match the loads after the read barrier or the address-dependency barrier, and
 vice versa:
 
@@ -1093,6 +1114,7 @@ vice versa:
 	WRITE_ONCE(c, 3);    }    / \    {  x = READ_ONCE(a);
 	WRITE_ONCE(d, 4);    }----   --->{  y = READ_ONCE(b);
 \end{VerbatimU}
+\end{Note}
 
 \subsection{Examples of memory barrier sequences}
 \label{sec:Examples of memory barrier sequences}
@@ -2094,9 +2116,11 @@ systems because it is assumed that a CPU will appear to be self-consistent,
 and will order overlapping accesses correctly with respect to itself.
 However, see \cref{sec:Virtual machine guests} below.
 
-[!] Note that SMP memory barriers \emph{must} be used to control the ordering of
+\begin{Note}
+Note that SMP memory barriers \emph{must} be used to control the ordering of
 references to shared memory on SMP systems, though the use of locking instead
 is sufficient.
+\end{Note}
 
 Mandatory barriers should not be used to control SMP effects, since mandatory
 barriers impose unnecessary overhead on both SMP and UP systems.
@@ -2284,9 +2308,11 @@ These operations all imply certain barriers:
      Failed locks do not imply any sort of barrier.
 \end{enumerate}
 
-[!] Note: one of the consequences of lock ACQUIREs and RELEASEs being only
+\begin{Note}
+One of the consequences of lock ACQUIREs and RELEASEs being only
 one-way barriers is that the effects of instructions outside of a critical
 section may seep into the inside of the critical section.
+\end{Note}
 
 An ACQUIRE followed by a RELEASE may not be assumed to be full memory barrier
 because it is possible for an access preceding the ACQUIRE to happen after the
@@ -2550,7 +2576,8 @@ The available waker functions include:
 In terms of memory ordering, these functions all provide the same guarantees of
 a \co{wake_up()} (or stronger).
 
-[!] Note that the memory barriers implied by the sleeper and the waker do
+\begin{Note}
+Note that the memory barriers implied by the sleeper and the waker do
 \emph{not} order multiple stores before the wake-up with respect to loads
 of those stored values after the sleeper has called \co{set_current_state()}.
 For instance, if the sleeper does:
@@ -2596,6 +2623,7 @@ and the waker should do:
 	event_indicated = 1;
 	wake_up(&event_wait_queue);
 \end{VerbatimU}
+\end{Note}
 
 \subsection{Miscellaneous functions}
 
@@ -3083,13 +3111,17 @@ accesses cross from the CPU side of things to the memory side of things, and
 the order in which the effects are perceived to happen by the other observers
 in the system.
 
-[!] Memory barriers are \emph{not} needed within a given CPU, as CPUs always see
+\begin{Note}
+Memory barriers are \emph{not} needed within a given CPU, as CPUs always see
 their own loads and stores as if they had happened in program order.
+\end{Note}
 
-[!] MMIO or other device accesses may bypass the cache system.
+\begin{Note}
+MMIO or other device accesses may bypass the cache system.
 This depends on the properties of the memory window through which devices
 are accessed and/or the use of any special device communication instructions
 the CPU may have.
+\end{Note}
 
 
 \subsection{Cache coherency vs DMA}
