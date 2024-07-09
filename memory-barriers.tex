@@ -2,7 +2,7 @@
 
 \section{Authors}
 
-\begin{itemize}
+\begin{itemize}[itemsep=0pt]
   \item David Howells <dhowells@redhat.com>
   \item Paul E. McKenney <paulmck@kernel.org>
   \item Will Deacon <will.deacon@arm.com>
@@ -484,7 +484,7 @@ Memory barriers come in four basic varieties:
 
 And a couple of implicit varieties:
 
-\begin{enumerate}
+\begin{enumerate}[resume]
  \item
      ACQUIRE operations.
 
@@ -1695,7 +1695,7 @@ use general barriers throughout.
 The Linux kernel has a variety of different barriers that act at different
 levels:
 
-\begin{itemize}
+\begin{itemize}[itemsep=0pt]
  \item Compiler barrier.
  \item CPU memory barriers.
 \end{itemize}
@@ -2256,7 +2256,7 @@ outside of arch specific code.
 
 The Linux kernel has a number of locking constructs:
 
-\begin{itemize}
+\begin{itemize}[itemsep=0pt]
  \item spin locks
  \item R/W spin locks
  \item mutexes
@@ -2686,7 +2686,7 @@ work correctly, even if it's in an SMP kernel.
 There are, however, four circumstances in which reordering definitely
 \emph{could} be a problem:
 
-\begin{itemize}
+\begin{itemize}[itemsep=0pt]
  \item Interprocessor interaction.
  \item Atomic operations.
  \item Accessing devices.
