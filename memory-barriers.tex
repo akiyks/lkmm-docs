@@ -238,8 +238,8 @@ And there are a number of things that \emph{must} or \emph{must not} be assumed:
        with memory references that are not protected by \co{READ_ONCE()} and
        \co{WRITE_ONCE()}.
        Without them, the compiler is within its rights to do all sorts of
-       ``creative'' transformations, which are covered in the COMPILER BARRIER
-       section.
+       ``creative'' transformations, which are covered in
+       \cref{sec:Compiler barrier}.
 
  \item It \emph{must not} be assumed that independent loads and stores will be issued
        in the order given.  This means that for:
@@ -380,7 +380,7 @@ Memory barriers come in four basic varieties:
      the stores after the write barrier.
 
      [!] Note that write barriers should normally be paired with read or
-     address-dependency barriers; see the "SMP barrier pairing" subsection.
+     address-dependency barriers; see \cref{sec:SMP barrier pairing}.
 
 
  \item
@@ -415,7 +415,7 @@ Memory barriers come in four basic varieties:
      load will be perceptible to any loads issued after the
      address-dependency barrier.
 
-     See the "Examples of memory barrier sequences" subsection for diagrams
+     See \cref{sec:Examples of memory barrier sequences} subsection for diagrams
      showing the ordering constraints.
 
      [!] Note that the first load really has to have an \emph{address}
@@ -424,10 +424,10 @@ Memory barriers come in four basic varieties:
      but the dependency is through a conditional rather than actually
      loading the address itself, then it's a \emph{control} dependency and
      a full read barrier or better is required.
-     See the "Control dependencies" subsection for more information.
+     See \cref{sec:Control dependencies} for more information.
 
      [!] Note that address-dependency barriers should normally be paired with
-     write barriers; see the "SMP barrier pairing" subsection.
+     write barriers; see \cref{sec:SMP barrier pairing}.
 
      [!] Kernel release v5.9 removed kernel APIs for explicit
      address-dependency barriers.
@@ -450,7 +450,7 @@ Memory barriers come in four basic varieties:
      substitute for them.
 
      [!] Note that read barriers should normally be paired with write barriers;
-     see the "SMP barrier pairing" subsection.
+     see \cref{sec:SMP barrier pairing}.
 
 
  \item
@@ -556,7 +556,7 @@ There are certain things that the Linux kernel memory barriers do not guarantee:
      There is no guarantee that a CPU will see the correct order of effects
      from a second CPU's accesses, even \emph{if} the second CPU uses a memory
      barrier, unless the first CPU \emph{also} uses a matching memory barrier
-     (see the subsection on "SMP Barrier Pairing").
+     (see \cref{sec:SMP barrier pairing}).
 
  \item
      There is no guarantee that some intervening piece of off-the-CPU
@@ -663,7 +663,7 @@ An address-dependency barrier is not required to order dependent writes
 because the CPUs that the Linux kernel supports don't do writes until they
 are certain (1) that the write will actually happen, (2) of the location of
 the write, and (3) of the value to be written.
-But please carefully read the "CONTROL DEPENDENCIES" section and the
+But please carefully read \cref{sec:Control dependencies} and the
 \path{Documentation/RCU/rcu_dereference.rst} file:
 The compiler can and does break dependencies in a great many highly
 creative ways.
@@ -699,7 +699,7 @@ being lost.
 
 Note well that the ordering provided by an address dependency is local to
 the CPU containing it.
-See the section on "Multicopy atomicity" for more information.
+See \cref{sec:Multicopy atomicity} for more information.
 
 
 The address-dependency barrier is very important to the RCU system,
@@ -712,6 +712,7 @@ incompletely initialised.
 
 
 \subsection{Control dependencies}
+\label{sec:Control dependencies}
 
 Control dependencies can be a bit tricky because current compilers do
 not understand them.
@@ -957,7 +958,7 @@ invoked by those two clauses), not to code following that if-statement.
 
 Note well that the ordering provided by a control dependency is local
 to the CPU containing it.
-See the section on "Multicopy atomicity" for more information.
+See \cref{sec:Multicopy atomicity} for more information.
 
 
 In summary:
@@ -996,7 +997,7 @@ In summary:
       dependency into nonexistence.
       Careful use of \co{READ_ONCE()} or \co{atomic{,64}_read()} can help
       to preserve your control dependency.
-      Please see the COMPILER BARRIER section for more information.
+      Please see \cref{sec:Compiler barrier} for more information.
 
  \item
       Control dependencies apply only to the then-clause and else-clause
@@ -1019,6 +1020,7 @@ In summary:
 \end{itemize}
 
 \subsection{SMP barrier pairing}
+\label{sec:SMP barrier pairing}
 
 When dealing with CPU-CPU interactions, certain types of memory barrier should
 always be paired.
@@ -1090,6 +1092,7 @@ vice versa:
 \end{VerbatimU}
 
 \subsection{Examples of memory barrier sequences}
+\label{sec:Examples of memory barrier sequences}
 
 Firstly, write barriers act as partial orderings on store operations.
 Consider the following sequence of events:
@@ -1487,6 +1490,7 @@ the speculation will be cancelled and the value reloaded:
 
 
 \subsection{Multicopy atomicity}
+\label{sec:Multicopy atomicity}
 
 Multicopy atomicity is a deeply intuitive notion about ordering that is
 not always provided by real computer systems, namely that a given store
@@ -1669,6 +1673,7 @@ levels:
 
 
 \subsection{Compiler barrier}
+\label{sec:Compiler barrier}
 
 The Linux kernel has an explicit compiler barrier function that prevents the
 compiler from moving the memory accesses either side of it to the other side:
@@ -2080,7 +2085,7 @@ A consensus has not yet been reached about these problems, however the
 SMP memory barriers are reduced to compiler barriers on uniprocessor compiled
 systems because it is assumed that a CPU will appear to be self-consistent,
 and will order overlapping accesses correctly with respect to itself.
-However, see the subsection on "Virtual Machine Guests" below.
+However, see \cref{sec:Virtual machine guests} below.
 
 [!] Note that SMP memory barriers \emph{must} be used to control the ordering of
 references to shared memory on SMP systems, though the use of locking instead
@@ -2175,7 +2180,7 @@ There are some more advanced barrier functions:
 
      Note that the \co{dma_*()} barriers do not provide any ordering
      guarantees for accesses to MMIO regions.
-     See the later "KERNEL I/O BARRIER EFFECTS" subsection for more
+     See the later \cref{sec:Kernel I/O barrier effects} for more
      information about I/O accessors and MMIO ordering.
 
  \item \tco{pmem_wmb()}
@@ -2356,7 +2361,7 @@ systems, and so cannot be counted on in such a situation to actually achieve
 anything at all---especially with respect to I/O accesses---unless combined
 with interrupt disabling operations.
 
-See also the section on "Inter-CPU acquiring barrier effects".
+See also \cref{sec:Inter-CPU acquiring barrier effects}.
 
 
 As an example, consider the following:
@@ -2587,6 +2592,7 @@ Other functions that imply barriers:
 
 
 \section{Inter-CPU acquiring barrier effects}
+\label{sec:Inter-CPU acquiring barrier effects}
 
 On SMP systems locking primitives give a more substantial form of barrier:
 One that does affect memory access ordering on other CPUs, within the
@@ -2849,6 +2855,7 @@ guarantee ordering.
 
 
 \section{Kernel I/O barrier effects}
+\label{sec:Kernel I/O barrier effects}
 
 Interfacing with peripherals via I/O accesses is deeply architecture and device
 specific.
@@ -3265,6 +3272,7 @@ greatly reduced its impact on the memory model.
 
 
 \subsection{Virtual machine guests}
+\label{sec:Virtual machine guests}
 
 Guests running within virtual machines might be affected by SMP effects even if
 the guest itself is compiled without SMP support.
