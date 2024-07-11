@@ -15,3 +15,11 @@ To be included:
  
 [1]: git://git.kernel.org/pub/scm/linux/kernel/git/paulmck/perfbook.git
 [2]: git://git.kernel.org/pub/scm/linux/kernel/git/paulmck/linux-rcu.git
+
+Unlike perfbook's repository, there is no Makefile or build script.
+
+Just run:
+
+    latexmk -pdf lkmm-docs-eb.tex
+
+Page size is fixed to EBook size at the moment.
