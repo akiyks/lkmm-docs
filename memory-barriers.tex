@@ -365,10 +365,8 @@ the code to sanely control the interaction of multiple CPUs and/or devices.
 
 Memory barriers come in four basic varieties:
 
-\begin{enumerate}
- \item
-     Write (or store) memory barriers.
-
+\begin{description}[style=nextline]
+ \item[Write (or store) memory barriers:]
      A write memory barrier gives a guarantee that all the STORE operations
      specified before the barrier will appear to happen before all the STORE
      operations specified after the barrier with respect to the other
@@ -388,11 +386,10 @@ Memory barriers come in four basic varieties:
      \end{Note}
 
 
- \item
-     Address-dependency barriers (HISTORICAL).
+ \item[Address-dependency barriers (HISTORICAL):]
 
      \begin{Note}
-     This section is marked as HISTORICAL\@:
+     This item is marked as HISTORICAL\@:
      It covers the long-obsolete \co{smp_read_barrier_depends()} macro,
      the semantics of which are now implicit in all marked accesses.
      For more up-to-date information, including how compiler transformations
@@ -412,7 +409,8 @@ Memory barriers come in four basic varieties:
      loads only; it is not required to have any effect on stores, independent
      loads or overlapping loads.
 
-     As mentioned in (1), the other CPUs in the system can be viewed as
+     As mentioned above in ``Write memory barriers'',
+     the other CPUs in the system can be viewed as
      committing sequences of stores to the memory system that the CPU being
      considered can then perceive.
      An address-dependency barrier issued by the CPU under consideration
@@ -448,9 +446,7 @@ Memory barriers come in four basic varieties:
      address-dependency barriers.
      \end{Note}
 
- \item
-     Read (or load) memory barriers.
-
+ \item[Read (or load) memory barriers:]
      A read barrier is an address-dependency barrier plus a guarantee that all
      the LOAD operations specified before the barrier will appear to happen
      before all the LOAD operations specified after the barrier with respect to
@@ -467,10 +463,7 @@ Memory barriers come in four basic varieties:
      see \cref{sec:SMP barrier pairing}.
      \end{Note}
 
-
- \item
-     General memory barriers.
-
+ \item[General memory barriers:]
      A general memory barrier gives a guarantee that all the LOAD and STORE
      operations specified before the barrier will appear to happen before all
      the LOAD and STORE operations specified after the barrier with respect to
@@ -480,14 +473,12 @@ Memory barriers come in four basic varieties:
 
      General memory barriers imply both read and write memory barriers, and so
      can substitute for either.
-\end{enumerate}
+\end{description}
 
 And a couple of implicit varieties:
 
-\begin{enumerate}[resume]
- \item
-     ACQUIRE operations.
-
+\begin{description}[style=nextline]
+ \item[ACQUIRE operations:]
      This acts as a one-way permeable barrier.
      It guarantees that all memory operations after the ACQUIRE operation
      will appear to happen after the ACQUIRE operation with respect to the
@@ -502,9 +493,7 @@ And a couple of implicit varieties:
      operation.
 
 
- \item
-     RELEASE operations.
-
+ \item[RELEASE operations:]
      This also acts as a one-way permeable barrier.
      It guarantees that all memory operations before the RELEASE operation
      will appear to happen before the RELEASE operation with respect to
@@ -528,7 +517,7 @@ And a couple of implicit varieties:
 
      This means that ACQUIRE acts as a minimal ``acquire'' operation and
      RELEASE acts as a minimal ``release'' operation.
-\end{enumerate}
+\end{description}
 
 A subset of the atomic operations described in \path{atomic_t.txt} have
 ACQUIRE and RELEASE variants in addition to fully-ordered and relaxed
