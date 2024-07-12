@@ -5,10 +5,10 @@ LaTeX typesetting framework [1].
 List of included documents (from Linux -rcu repository [2]):
 
  - Documentation/memory-barriers.txt
+ - tools/memory-model/README
 
 To be included:
 
- - tools/memory-model/README
  - tools/memory-model/Documentation/README
  - tools/memory-model/Documentation/*.txt
  - Documentation/litmus-tests/README
