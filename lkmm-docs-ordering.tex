@@ -1,0 +1,627 @@
+\chapter{Overview of Memory-Ordering Operations}
+
+This document gives an overview of the categories of memory-ordering
+operations provided by the Linux-kernel memory model (LKMM).
+
+
+\section{Categories of Ordering}
+
+This section lists LKMM's three top-level categories of memory-ordering
+operations in decreasing order of strength:
+
+\begin{enumerate}
+ \item	Barriers (also known as ``fences'').
+	A barrier orders some or all of the CPU's prior operations
+	against some or all of its subsequent operations.
+
+ \item	Ordered memory accesses.
+	These operations order themselves against some or all of
+	the CPU's prior accesses or some or all	of the CPU's subsequent
+	accesses, depending on the subcategory of the operation.
+
+ \item	Unordered accesses, as the name indicates, have no ordering
+	properties except to the extent that they interact with an
+	operation in the previous categories.
+	This being the real world, some of these ``unordered''
+	operations provide limited ordering in some special situations.
+\end{enumerate}
+
+Each of the above categories is described in more detail by one of the
+following sections.
+
+
+\section{Barriers}
+
+Each of the following categories of barriers is described in its own
+subsection below:
+
+\begin{enumerate}
+ \item	Full memory barriers.
+
+ \item	Read-modify-write (RMW) ordering augmentation barriers.
+
+ \item	Write memory barrier.
+
+ \item	Read memory barrier.
+
+ \item	Compiler barrier.
+\end{enumerate}
+
+Note well that many of these primitives generate absolutely no code
+in kernels built with \co{CONFIG_SMP=n}.
+Therefore, if you are writing a device driver, which must correctly
+order accesses to a physical device even in kernels built with
+\co{CONFIG_SMP=n}, please use the ordering primitives provided for
+that purpose.
+For example, instead of \co{smp_mb()}, use \co{mb()}.
+See the ``Linux Kernel Device Drivers'' book or the
+\url{https://lwn.net/Articles/698014/} article for more information.
+
+
+\subsection{Full Memory Barriers}
+
+The Linux-kernel primitives that provide full ordering include:
+
+\begin{itemize}
+ \item	The \co{smp_mb()} full memory barrier.
+
+ \item	Value-returning RMW atomic operations whose names do not end in
+	\co{_acquire}, \co{_release}, or \co{_relaxed}.
+
+ \item	RCU's grace-period primitives.
+\end{itemize}
+
+First, the \co{smp_mb()} full memory barrier orders all of the CPU's prior
+accesses against all subsequent accesses from the viewpoint of all CPUs.
+In other words, all CPUs will agree that any earlier action taken
+by that CPU happened before any later action taken by that same CPU\@.
+For example, consider the following:
+
+\begin{VerbatimU}
+	WRITE_ONCE(x, 1);
+	smp_mb(); // Order store to x before load from y.
+	r1 = READ_ONCE(y);
+\end{VerbatimU}
+
+All CPUs will agree that the store to~\qco{x} happened before the load
+from~\qco{y}, as indicated by the comment.
+And yes, please comment your memory-ordering primitives.
+It is surprisingly hard to remember their purpose after even a few months.
+
+Second, some RMW atomic operations provide full ordering.
+These operations include value-returning RMW atomic operations
+(that is, those with non-void return types) whose names do not end in
+\co{_acquire}, \co{_release}, or \co{_relaxed}.
+Examples include \co{atomic_add_return()}, \co{atomic_dec_and_test()},
+\co{cmpxchg()}, and \co{xchg()}.
+Note that conditional RMW atomic operations such as \co{cmpxchg()} are
+only guaranteed to provide ordering when they succeed.
+When RMW atomic operations provide full ordering, they partition the
+CPU's accesses into three groups:
+
+\begin{enumerate}
+ \item	All code that executed prior to the RMW atomic operation.
+
+ \item	The RMW atomic operation itself.
+
+ \item	All code that executed after the RMW atomic operation.
+\end{enumerate}
+
+All CPUs will agree that any operation in a given partition happened
+before any operation in a higher-numbered partition.
+
+In contrast, non-value-returning RMW atomic operations (that is, those
+with void return types) do not guarantee any ordering whatsoever.
+Nor do value-returning RMW atomic operations whose names end in \co{_relaxed}.
+Examples of the former include \co{atomic_inc()} and \co{atomic_dec()},
+while examples of the latter include \co{atomic_cmpxchg_relaxed()} and
+\co{atomic_xchg_relaxed()}.
+Similarly, value-returning non-RMW atomic operations such as
+\co{atomic_read()} do not guarantee full ordering, and are covered in
+the later section on unordered operations.
+
+Value-returning RMW atomic operations whose names end in \co{_acquire} or
+\co{_release} provide limited ordering, and will be described later in this
+document.
+
+Finally, RCU's grace-period primitives provide full ordering.
+These primitives include \co{synchronize_rcu()}, \co{synchronize_rcu_expedited()},
+\co{synchronize_srcu()} and so on.
+However, these primitives have orders of magnitude greater overhead
+than \co{smp_mb()}, \co{atomic_xchg()}, and so on.
+Furthermore, RCU's grace-period primitives can only be invoked in
+sleepable contexts.
+Therefore, RCU's grace-period primitives are typically instead used to
+provide ordering against RCU read-side critical sections, as documented
+in their comment headers.
+But of course if you need a \co{synchronize_rcu()} to interact with
+readers, it costs you nothing to also rely on its additional
+full-memory-barrier semantics.
+Just please carefully comment this, otherwise your future self will hate you.
+
+
+\subsection{RMW Ordering Augmentation Barriers}
+
+As noted in the previous section, non-value-returning RMW operations
+such as \co{atomic_inc()} and \co{atomic_dec()} guarantee no ordering whatsoever.
+Nevertheless, a number of popular CPU families, including x86, provide
+full ordering for these primitives.
+One way to obtain full ordering on all architectures is to add a call
+to \co{smp_mb()}:
+
+\begin{VerbatimU}
+	WRITE_ONCE(x, 1);
+	atomic_inc(&my_counter);
+	smp_mb(); // Inefficient on x86!!!
+	r1 = READ_ONCE(y);
+\end{VerbatimU}
+
+This works, but the added \co{smp_mb()} adds needless overhead for
+x86, on which \co{atomic_inc()} provides full ordering all by itself.
+The \co{smp_mb__after_atomic()} primitive can be used instead:
+
+\begin{VerbatimU}
+	WRITE_ONCE(x, 1);
+	atomic_inc(&my_counter);
+	smp_mb__after_atomic(); // Order store to x before load from y.
+	r1 = READ_ONCE(y);
+\end{VerbatimU}
+
+The \co{smp_mb__after_atomic()} primitive emits code only on CPUs whose
+\co{atomic_inc()} implementations do not guarantee full ordering, thus
+incurring no unnecessary overhead on x86.
+There are a number of variations on the \co{smp_mb__*()} theme:
+
+\begin{itemize}
+ \item	\co{smp_mb__before_atomic()}, which provides full ordering prior
+	to an unordered RMW atomic operation.
+
+ \item	\co{smp_mb__after_atomic()}, which, as shown above, provides full
+	ordering subsequent to an unordered RMW atomic operation.
+
+ \item	\co{smp_mb__after_spinlock()}, which provides full ordering subsequent
+	to a successful spinlock acquisition.
+	Note that \co{spin_lock()} is always successful but \co{spin_trylock()}
+	might not be.
+
+ \item	\co{smp_mb__after_srcu_read_unlock()}, which provides full ordering
+	subsequent to an \co{srcu_read_unlock()}.
+\end{itemize}
+
+It is bad practice to place code between the \co{smp__*()} primitive and the
+operation whose ordering that it is augmenting.
+The reason is that the ordering of this intervening code will differ from
+one CPU architecture to another.
+
+
+\subsection{Write Memory Barrier}
+
+The Linux kernel's write memory barrier is \co{smp_wmb()}.
+If a CPU executes the following code:
+
+\begin{VerbatimU}
+	WRITE_ONCE(x, 1);
+	smp_wmb();
+	WRITE_ONCE(y, 1);
+\end{VerbatimU}
+
+Then any given CPU will see the write to~\qco{x} has having happened before
+the write to~\qco{y}.  However, you are usually better off using a release
+store, as described in the ``Release Operations'' section below.
+
+Note that \co{smp_wmb()} might fail to provide ordering for unmarked C-language
+stores because profile-driven optimization could determine that the
+value being overwritten is almost always equal to the new value.
+Such a compiler might then reasonably decide to transform \qtco{x = 1} and
+\qtco{y = 1} as follows:
+
+\begin{VerbatimU}
+	if (x != 1)
+		x = 1;
+	smp_wmb(); // BUG: does not order the reads!!!
+	if (y != 1)
+		y = 1;
+\end{VerbatimU}
+
+Therefore, if you need to use \co{smp_wmb()} with unmarked C-language writes,
+you will need to make sure that none of the compilers used to build
+the Linux kernel carry out this sort of transformation, both now and in
+the future.
+
+
+\subsection{Read Memory Barrier}
+
+The Linux kernel's read memory barrier is \co{smp_rmb()}.
+If a CPU executes the following code:
+
+\begin{VerbatimU}
+	r0 = READ_ONCE(y);
+	smp_rmb();
+	r1 = READ_ONCE(x);
+\end{VerbatimU}
+
+Then any given CPU will see the read from~\qco{y} as having preceded the read
+from~\qco{x}.
+However, you are usually better off using an acquire load, as described
+in the ``Acquire Operations'' section below.
+
+\subsection{Compiler Barrier}
+
+The Linux kernel's compiler barrier is \co{barrier()}.
+This primitive prohibits compiler code-motion optimizations that might
+move memory references across the point in the code containing the
+\co{barrier()}, but does not constrain hardware memory ordering.
+For example, this can be used to prevent to compiler from moving code
+across an infinite loop:
+
+\begin{VerbatimU}
+	WRITE_ONCE(x, 1);
+	while (dontstop)
+		barrier();
+	r1 = READ_ONCE(y);
+\end{VerbatimU}
+
+Without the \co{barrier()}, the compiler would be within its rights to move the
+\co{WRITE_ONCE()} to follow the loop.
+This code motion could be problematic in the case where an interrupt
+handler terminates the loop.
+Another way to handle this is to use \co{READ_ONCE()} for the load of
+\qco{dontstop}.
+
+Note that the barriers discussed previously use \co{barrier()} or its low-level
+equivalent in their implementations.
+
+
+\section{Ordered Memory Accesses}
+
+The Linux kernel provides a wide variety of ordered memory accesses:
+
+\begin{enumerate}
+ \item	Release operations.
+
+ \item	Acquire operations.
+
+ \item	RCU read-side ordering.
+
+ \item	Control dependencies.
+\end{enumerate}
+
+Each of the above categories has its own section below.
+
+
+\subsection{Release Operations}
+
+Release operations include \co{smp_store_release()}, \co{atomic_set_release()},
+\co{rcu_assign_pointer()}, and value-returning RMW operations whose names
+end in \co{_release}.
+These operations order their own store against all of the CPU's prior
+memory accesses.
+Release operations often provide improved readability and performance
+compared to explicit barriers.
+For example, use of \co{smp_store_release()} saves a line compared to the
+\co{smp_wmb()} example above:
+
+\begin{VerbatimU}
+	WRITE_ONCE(x, 1);
+	smp_store_release(&y, 1);
+\end{VerbatimU}
+
+More important, \co{smp_store_release()} makes it easier to connect up the
+different pieces of the concurrent algorithm.
+The variable stored to by the \co{smp_store_release()}, in this case~\qco{y},
+will normally be used in an acquire operation in other parts of the
+concurrent algorithm.
+
+To see the performance advantages, suppose that the above example read
+from~\qco{x} instead of writing to it.
+Then an \co{smp_wmb()} could not guarantee ordering, and an \co{smp_mb()}
+would be needed instead:
+
+\begin{VerbatimU}
+	r1 = READ_ONCE(x);
+	smp_mb();
+	WRITE_ONCE(y, 1);
+\end{VerbatimU}
+
+But \co{smp_mb()} often incurs much higher overhead than does
+\co{smp_store_release()}, which still provides the needed ordering of~\qco{x}
+against=\qco{y}.
+On x86, the version using \co{smp_store_release()} might compile
+to a simple load instruction followed by a simple store instruction.
+In contrast, the \co{smp_mb()} compiles to an expensive instruction that
+provides the needed ordering.
+
+There is a wide variety of release operations:
+
+\begin{itemize}
+ \item	Store operations, including not only the aforementioned
+	\co{smp_store_release()}, but also \co{atomic_set_release()}, and
+	\co{atomic_long_set_release()}.
+
+ \item	RCU's \co{rcu_assign_pointer()} operation.  This is the same as
+	\co{smp_store_release()} except that:
+	(1)~It takes the pointer to be assigned to instead of a pointer
+	to that pointer, (2)~It is intended to be used in conjunction with
+	\co{rcu_dereference()} and similar rather than \co{smp_load_acquire()},
+	and (3)~It checks for an RCU-protected pointer in ``sparse'' runs.
+
+ \item	Value-returning RMW operations whose names end in \co{_release},
+	such as \co{atomic_fetch_add_release()} and \co{cmpxchg_release()}.
+	Note that release ordering is guaranteed only against the
+	memory-store portion of the RMW operation, and not against the
+	memory-load portion.
+	Note also that conditional operations such as \co{cmpxchg_release()}
+	are only guaranteed to provide ordering when they succeed.
+\end{itemize}
+
+As mentioned earlier, release operations are often paired with acquire
+operations, which are the subject of the next section.
+
+
+\subsection{Acquire Operations}
+
+Acquire operations include \co{smp_load_acquire()}, \co{atomic_read_acquire()},
+and value-returning RMW operations whose names end in \co{_acquire}.
+These operations order their own load against all of the CPU's subsequent
+memory accesses.
+Acquire operations often provide improved performance and readability
+compared to explicit barriers.
+For example, use of \co{smp_load_acquire()} saves a line compared to the
+\co{smp_rmb()} example above:
+
+\begin{VerbatimU}
+	r0 = smp_load_acquire(&y);
+	r1 = READ_ONCE(x);
+\end{VerbatimU}
+
+As with \co{smp_store_release()}, this also makes it easier to connect
+the different pieces of the concurrent algorithm by looking for the
+\co{smp_store_release()} that stores to~\qco{y}.
+In addition, \co{smp_load_acquire()} improves upon \co{smp_rmb()} by
+ordering against subsequent stores as well as against subsequent loads.
+
+There are a couple of categories of acquire operations:
+
+\begin{itemize}
+ \item	Load operations, including not only the aforementioned
+	\co{smp_load_acquire()}, but also \co{atomic_read_acquire()}, and
+	\co{atomic64_read_acquire()}.
+
+ \item	Value-returning RMW operations whose names end in \co{_acquire},
+	such as \co{atomic_xchg_acquire()} and \co{atomic_cmpxchg_acquire()}.
+	Note that acquire ordering is guaranteed only against the
+	memory-load portion of the RMW operation, and not against the
+	memory-store portion.
+	Note also that conditional operations such as
+	\co{atomic_cmpxchg_acquire()} are only guaranteed to provide
+	ordering when they succeed.
+\end{itemize}
+
+Symmetry being what it is, acquire operations are often paired with the
+release operations covered earlier.
+For example, consider the following example, where \co{task0()} and
+\co{task1()} execute concurrently:
+
+\begin{VerbatimU}
+	void task0(void)
+	{
+		WRITE_ONCE(x, 1);
+		smp_store_release(&y, 1);
+	}
+
+	void task1(void)
+	{
+		r0 = smp_load_acquire(&y);
+		r1 = READ_ONCE(x);
+	}
+\end{VerbatimU}
+
+If~\qco{x} and~\qco{y} are both initially zero, then either \co{r0}'s final
+value will be zero or \co{r1}'s final value will be one, thus providing
+the required ordering.
+
+
+\subsection{RCU Read-Side Ordering}
+
+This category includes read-side markers such as \co{rcu_read_lock()}
+and \co{rcu_read_unlock()} as well as pointer-traversal primitives such as
+\co{rcu_dereference()} and \co{srcu_dereference()}.
+
+Compared to locking primitives and RMW atomic operations, markers
+for RCU read-side critical sections incur very low overhead because
+they interact only with the corresponding grace-period primitives.
+For example, the \co{rcu_read_lock()} and \co{rcu_read_unlock()} markers interact
+with \co{synchronize_rcu()}, \co{synchronize_rcu_expedited()}, and \co{call_rcu()}.
+The way this works is that if a given call to \co{synchronize_rcu()} cannot
+prove that it started before a given call to \co{rcu_read_lock()}, then
+that \co{synchronize_rcu()} must block until the matching \co{rcu_read_unlock()}
+is reached.
+For more information, please see the \co{synchronize_rcu()}
+docbook header comment and the material in \path{Documentation/RCU}.
+
+RCU's pointer-traversal primitives, including \co{rcu_dereference()} and
+\co{srcu_dereference()}, order their load (which must be a pointer) against any
+of the CPU's subsequent memory accesses whose address has been calculated
+from the value loaded.
+There is said to be an \emph{address dependency} from the value returned by
+the \co{rcu_dereference()} or \co{srcu_dereference()} to that subsequent
+memory access.
+
+A call to \co{rcu_dereference()} for a given RCU-protected pointer is
+usually paired with a call to a call to \co{rcu_assign_pointer()} for that
+same pointer in much the same way that a call to \co{smp_load_acquire()} is
+paired with a call to \co{smp_store_release()}.
+Calls to \co{rcu_dereference()} and \co{rcu_assign_pointer} are often
+buried in other APIs, for example, the RCU list API members defined in
+\path{include/linux/rculist.h}.
+For more information, please see the docbook headers in that file, the most
+recent LWN article on the RCU API (\url{https://lwn.net/Articles/777036/}),
+and of course the material in \path{Documentation/RCU}.
+
+If the pointer value is manipulated between the \co{rcu_dereference()}
+that returned it and a later \co{dereference()}, please read
+\path{Documentation/RCU/rcu_dereference.rst}.
+It can also be quite helpful to review uses in the Linux kernel.
+
+
+\subsection{Control Dependencies}
+
+A control dependency extends from a marked load (\co{READ_ONCE()} or stronger)
+through an \qco{if} condition to a marked store (\co{WRITE_ONCE()} or stronger)
+that is executed only by one of the legs of that \qco{if} statement.
+Control dependencies are so named because they are mediated by
+control-flow instructions such as comparisons and conditional branches.
+
+In short, you can use a control dependency to enforce ordering between
+an \co{READ_ONCE()} and a \co{WRITE_ONCE()} when there is an \qco{if} condition
+between them.
+The canonical example is as follows:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q)
+		WRITE_ONCE(b, 1);
+\end{VerbatimU}
+
+In this case, all CPUs would see the read from~\qco{a} as happening before
+the write to~\qco{b}.
+
+However, control dependencies are easily destroyed by compiler
+optimizations, so any use of control dependencies must take into account
+all of the compilers used to build the Linux kernel.
+Please see the \path{control-dependencies.txt} file for more information.
+
+
+\section{Unordered Accesses}
+
+Each of these two categories of unordered accesses has a section below:
+
+\begin{enumerate}
+ \item	Unordered marked operations.
+
+ \item	Unmarked C-language accesses.
+\end{enumerate}
+
+
+\subsection{Unordered Marked Operations}
+
+Unordered operations to different variables are just that, unordered.
+However, if a group of CPUs apply these operations to a single variable,
+all the CPUs will agree on the operation order.
+Of course, the ordering of unordered marked accesses can also be
+constrained using the mechanisms described earlier in this document.
+
+These operations come in three categories:
+
+\begin{itemize}
+ \item	Marked writes, such as \co{WRITE_ONCE()} and \co{atomic_set()}.
+	These primitives required the compiler to emit the corresponding store
+	instructions in the expected execution order, thus suppressing
+	a number of destructive optimizations.
+	However, they provide no hardware ordering guarantees, and in
+	fact many CPUs will happily reorder marked writes with each other
+	or with other unordered operations, unless these operations are
+	to the same variable.
+
+ \item	Marked reads, such as \co{READ_ONCE()} and \co{atomic_read()}.
+	These primitives required the compiler to emit the corresponding load
+	instructions in the expected execution order, thus suppressing
+	a number of destructive optimizations.
+	However, they provide no hardware ordering guarantees, and in
+	fact many CPUs will happily reorder marked reads with each other
+	or with other unordered operations, unless these operations are
+	to the same variable.
+
+ \item	Unordered RMW atomic operations.
+	These are non-value-returning RMW atomic operations whose names
+	do not end in \co{_acquire} or \co{_release}, and also
+	value-returning RMW operations whose names end in \co{_relaxed}.
+	Examples include \co{atomic_add()}, \co{atomic_or()},
+	and \co{atomic64_fetch_xor_relaxed()}.
+	These operations do carry out the specified RMW operation atomically,
+	for example, five concurrent \co{atomic_inc()} operations applied
+	to a given variable will reliably increase the value of that
+	variable by five.
+	However, many CPUs will happily reorder these operations with
+	each other or with other unordered operations.
+
+	This category of operations can be efficiently ordered using
+	\co{smp_mb__before_atomic()} and \co{smp_mb__after_atomic()}, as was
+	discussed in the ``RMW Ordering Augmentation Barriers'' section.
+\end{itemize}
+
+In short, these operations can be freely reordered unless they are all
+operating on a single variable or unless they are constrained by one of
+the operations called out earlier in this document.
+
+
+\subsection{Unmarked C-Language Accesses}
+
+Unmarked C-language accesses are normal variable accesses to normal
+variables, that is, to variables that are not \qco{volatile} and are not
+C11 atomic variables.
+These operations provide no ordering guarantees, and further do not
+guarantee ``atomic'' access.
+For example, the compiler might (and sometimes does) split a plain
+C-language store into multiple smaller stores.
+A load from that same variable running on some other CPU while such
+a store is executing might see a value that is a mashup of the old
+value and the new value.
+
+Unmarked C-language accesses are unordered, and are also subject to
+any number of compiler optimizations, many of which can break your
+concurrent code.
+It is possible to used unmarked C-language accesses for shared variables
+that are subject to concurrent access, but great care is required on
+an ongoing basis.
+The compiler-constraining \co{barrier()} primitive can be helpful, as
+can the various ordering primitives discussed in this document.
+It nevertheless bears repeating that use of unmarked C-language accesses
+requires careful attention to not just your code, but to all the
+compilers that might be used to build it.
+Such compilers might replace a series of loads with a single load,
+and might replace a series of stores with a single store.
+Some compilers will even split a single store into multiple smaller stores.
+
+But there are some ways of using unmarked C-language accesses for shared
+variables without such worries:
+
+\begin{itemize}
+ \item	Guard all accesses to a given variable by a particular lock,
+	so that there are never concurrent conflicting accesses to
+	that variable.
+	(There are ``conflicting accesses'' when
+	(1)~at least one of the concurrent accesses to a variable is an
+	unmarked C-language access and (2)~when at least one of those
+	accesses is a write, whether marked or not.)
+
+ \item	As above, but using other synchronization primitives such
+	as reader-writer locks or sequence locks.
+
+ \item	Use locking or other means to ensure that all concurrent accesses
+	to a given variable are reads.
+
+ \item	Restrict use of a given variable to statistics or heuristics
+	where the occasional bogus value can be tolerated.
+
+ \item	Declare the accessed variables as C11 atomics.
+	\url{https://lwn.net/Articles/691128/}
+
+ \item	Declare the accessed variables as \qco{volatile}.
+\end{itemize}
+
+If you need to live more dangerously, please do take the time to
+understand the compilers.
+One place to start is these two LWN articles:
+
+\begin{description}[style=nextline]
+\item[Who's afraid of a big bad optimizing compiler?]
+	\url{https://lwn.net/Articles/793253}
+\item[Calibrating your fear of big bad optimizing compilers]
+	\url{https://lwn.net/Articles/799218}
+\end{description}  
+
+Used properly, unmarked C-language accesses can reduce overhead on
+fastpaths.
+However, the price is great care and continual attention to your compiler
+as new versions come out and as new optimizations are enabled.
