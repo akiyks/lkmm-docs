@@ -2133,16 +2133,14 @@ compiler and the CPU from reordering them.
 
 There are some more advanced barrier functions:
 
-\begin{itemize}
- \item \tco{smp_store_mb(var, value)}
-
+\begin{description}[style=nextline]
+ \item[\tco{smp_store_mb(var, value)}]
      This assigns the value to the variable and then inserts a full memory
      barrier after it.  It isn't guaranteed to insert anything more than a
      compiler barrier in a UP compilation.
 
 
- \item \tco{smp_mb__before_atomic()} and \tco{smp_mb__after_atomic()}
-
+ \item[\tco{smp_mb__before_atomic()} and \tco{smp_mb__after_atomic()}]
      These are for use with atomic RMW functions that do not imply memory
      barriers, but where the code needs a memory barrier.
      Examples for atomic RMW functions that do not imply a memory barrier
@@ -2168,8 +2166,7 @@ There are some more advanced barrier functions:
 
      See \path{Documentation/atomic_{t,bitops}.txt} for more information.
 
-   \item \tco{dma_wmb()}, \tco{dma_rmb()}, and \tco{dma_mb()}
-
+   \item[\tco{dma_wmb()}, \tco{dma_rmb()}, and \tco{dma_mb()}]
      These are for use with consistent memory to guarantee the ordering
      of writes or reads of shared memory accessible to both the CPU and a
      DMA capable device.
@@ -2214,8 +2211,7 @@ There are some more advanced barrier functions:
      See the later \cref{sec:Kernel I/O barrier effects} for more
      information about I/O accessors and MMIO ordering.
 
- \item \tco{pmem_wmb()}
-
+ \item[\tco{pmem_wmb()}]
      This is for use with persistent memory to ensure that stores for which
      modifications are written to persistent storage reached a platform
      durability domain.
@@ -2231,15 +2227,14 @@ There are some more advanced barrier functions:
      For load from persistent memory, existing read memory barriers are
      sufficient to ensure read ordering.
 
- \item \tco{io_stop_wc()}
-
+ \item[\tco{io_stop_wc()}]
      For memory accesses with write-combining attributes (e.g., those returned
      by \co{ioremap_wc()}), the CPU may wait for prior accesses to be merged
      with subsequent ones.
      \co{io_stop_wc()} can be used to prevent the merging of write-combining
      memory accesses before this macro with those after it when such wait
      has performance implications.
-\end{itemize}
+\end{description}
 
 
 \section{Implicit kernel memory barriers}
@@ -2268,45 +2263,35 @@ In all cases there are variants on ``ACQUIRE'' operations and ``RELEASE'' operat
 for each construct.
 These operations all imply certain barriers:
 
-\begin{enumerate}
- \item
-     ACQUIRE operation implication:
-
+\begin{description}[style=nextline]
+ \item[ACQUIRE operation implication:]
      Memory operations issued after the ACQUIRE will be completed after the
      ACQUIRE operation has completed.
 
      Memory operations issued before the ACQUIRE may be completed after
      the ACQUIRE operation has completed.
 
- \item
-     RELEASE operation implication:
-
+ \item[RELEASE operation implication:]
      Memory operations issued before the RELEASE will be completed before the
      RELEASE operation has completed.
 
      Memory operations issued after the RELEASE may be completed before the
      RELEASE operation has completed.
 
- \item
-     ACQUIRE vs ACQUIRE implication:
-
+ \item[ACQUIRE vs ACQUIRE implication:]
      All ACQUIRE operations issued before another ACQUIRE operation will be
      completed before that ACQUIRE operation.
 
- \item
-     ACQUIRE vs RELEASE implication:
-
+ \item[ACQUIRE vs RELEASE implication:]
      All ACQUIRE operations issued before a RELEASE operation will be
      completed before the RELEASE operation.
 
- \item
-     Failed conditional ACQUIRE implication:
-
+ \item[Failed conditional ACQUIRE implication:]
      Certain locking variants of the ACQUIRE operation may fail, either due to
      being unable to get the lock immediately, or due to receiving an unblocked
      signal while asleep waiting for the lock to become available.
      Failed locks do not imply any sort of barrier.
-\end{enumerate}
+\end{description}
 
 \begin{Note}
 One of the consequences of lock ACQUIREs and RELEASEs being only
@@ -2910,7 +2895,7 @@ For drivers intending to be portable between multiple architectures and
 bus implementations, the kernel offers a series of accessor functions that
 provide various degrees of ordering guarantees:
 
-\begin{description}
+\begin{description}[style=nextline]
  \item[\tco{readX()}, \tco{writeX()}:]
 	The \co{readX()} and \co{writeX()} MMIO accessors take a pointer to
 	the peripheral being accessed as an \co{__iomem *} parameter.
@@ -3358,6 +3343,7 @@ See \path{Documentation/core-api/circular-buffers.rst} for details.
 
 \section{References}
 
+\begingroup
 \footnotesize
 \begin{itemize}
 \item
@@ -3482,3 +3468,4 @@ Intel Itanium Architecture Software Developer's Manual: Volume 1:
 	Section 4.4: Memory Access
   \end{itemize}
 \end{itemize}
+\endgroup
