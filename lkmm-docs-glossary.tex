@@ -1,0 +1,225 @@
+\chapter{Glossaries to LKMM}
+
+This document contains brief definitions of LKMM-related terms.
+Like most glossaries, it is not intended to be read front to back
+(except perhaps as a way of confirming a diagnosis of OCD), but rather
+to be searched for specific terms.
+
+\begin{description}[style=nextline]
+  \item[Address Dependency:]
+	When the address of a later memory access is computed
+	based on the value returned by an earlier load, an ``address
+	dependency'' extends from that load extending to the later access.
+	Address dependencies are quite common in RCU read-side critical
+	sections:
+
+\begin{fcvlabel}[ln:glossary:addr-dep]
+\begin{VerbatimN}[commandchars=\\\@\$]
+	rcu_read_lock();
+	p = rcu_dereference(gp);    \lnlbl@rcuderef$
+	do_something(p->a);    \lnlbl@refpa$
+	rcu_read_unlock();
+\end{VerbatimN}
+\end{fcvlabel}
+        
+	\begin{fcvref}[ln:glossary:addr-dep]
+	In this case, because the address of \qtco{p->a} on \clnref{refpa}
+	is computed from the value returned by the \co{rcu_dereference()}
+	on \clnref{rcuderef}, the address dependency extends from that
+	\co{rcu_dereference()} to that \qtco{p->a}.
+	In rare cases, optimizing compilers can destroy address dependencies.
+	Please see \path{Documentation/RCU/rcu_dereference.rst}
+	for more information.
+        \end{fcvref}
+
+	See also ``Control Dependency'' and ``Data Dependency''.
+
+      \item[Acquire:]
+	With respect to a lock, acquiring that lock, for example,
+	using \co{spin_lock()}.
+	With respect to a non-lock shared variable, a special operation
+	that includes a load and which orders that load before later memory
+	references running on that same CPU.
+	An example special acquire operation is \co{smp_load_acquire()},
+	but \co{atomic_read_acquire()} and \co{atomic_xchg_acquire()}
+	also include acquire loads.
+
+	When an acquire load returns the value stored by a release store
+	to that same variable, (in other words, the acquire load ``reads
+	from'' the release store), then all operations preceding that
+	store ``happen before'' any operations following that load acquire.
+
+	See also ``Happens-Before'', ``Reads-From'', ``Relaxed'', and ``Release''.
+
+  \item[Coherence (\tco{co}):]
+	When one CPU's store to a given variable overwrites
+	either the value from another CPU's store or some later value,
+	there is said to be a coherence link from the second CPU to
+	the first.
+
+	It is also possible to have a coherence link within a CPU, which
+	is a ``coherence internal'' (\co{coi}) link.
+	The term ``coherence external'' (\co{coe}) link is used when it
+	is necessary to exclude the \co{coi} case.
+
+	See also ``From-reads'' and ``Reads-from''.
+
+  \item[Control Dependency:]
+	When a later store's execution depends on a test
+	of a value computed from a value returned by an earlier load,
+	a ``control dependency'' extends from that load to that store.
+	For example:
+
+\begin{fcvlabel}[ln:glossary:ctrl-dep]
+\begin{VerbatimN}[commandchars=\\\@\$]
+	if (READ_ONCE(x))          \lnlbl@read$
+		WRITE_ONCE(y, 1);  \lnlbl@write$
+\end{VerbatimN}
+\end{fcvlabel}
+
+	\begin{fcvref}[ln:glossary:ctrl-dep]
+	Here, the control dependency extends from the \co{READ_ONCE()} on
+	\clnref{read} to the \co{WRITE_ONCE()} on \clnref{write}.
+        Control dependencies are fragile, and can be easily destroyed
+	by optimizing compilers.
+	\end{fcvref}
+	Please see \path{control-dependencies.txt} for more information.
+
+	See also ``Address Dependency'' and ``Data Dependency''.
+
+  \item[Cycle:]
+	Memory-barrier pairing is restricted to a pair of CPUs, as the
+	name suggests.
+	And in a great many cases, a pair of CPUs is all that is required.
+	In other cases, the notion of pairing must be extended to
+	additional CPUs, and the result is called a ``cycle''.
+	In a cycle, each CPU's ordering interacts with that of the next:
+
+\begin{VerbatimU}
+	CPU 0                CPU 1                CPU 2
+	WRITE_ONCE(x, 1);    WRITE_ONCE(y, 1);    WRITE_ONCE(z, 1);
+	smp_mb();            smp_mb();            smp_mb();
+	r0 = READ_ONCE(y);   r1 = READ_ONCE(z);   r2 = READ_ONCE(x);
+\end{VerbatimU}
+
+	CPU~0's \co{smp_mb()} interacts with that of CPU~1, which interacts
+	with that of CPU~2, which in turn interacts with that of CPU~0
+	to complete the cycle.
+	Because of the \co{smp_mb()} calls between each pair of memory
+	accesses, the outcome where \co{r0}, \co{r1}, and \co{r2} are all equal to
+	zero is forbidden by LKMM\@.
+
+	See also ``Pairing''.
+
+  \item[Data Dependency:]
+	When the data written by a later store is computed based
+	on the value returned by an earlier load, a ``data dependency''
+	extends from that load to that later store.
+	For example:
+
+\begin{fcvlabel}[ln:glossary:data-dep]
+\begin{VerbatimN}[commandchars=\\\@\$]
+	r1 = READ_ONCE(x);      \lnlbl@read$
+	WRITE_ONCE(y, r1 + 1);  \lnlbl@write$
+\end{VerbatimN}
+\end{fcvlabel}
+
+	\begin{fcvref}[ln:glossary:data-dep]
+	In this case, the data dependency extends from the \co{READ_ONCE()}
+	on \clnref{read} to the \co{WRITE_ONCE()} on \clnref{write}.
+	Data dependencies are fragile and can be easily destroyed by
+        optimizing compilers.
+	Because optimizing compilers put a great deal of effort into
+	working out what values integer variables might have, this is
+	especially true in cases where the dependency is carried through
+	an integer.
+	\end{fcvref}
+
+	See also ``Address Dependency'' and ``Control Dependency''.
+
+  \item[From-Reads (\tco{fr}):]
+	When one CPU's store to a given variable happened
+	too late to affect the value returned by another CPU's
+	load from that same variable, there is said to be a from-reads
+	link from the load to the store.
+
+	It is also possible to have a from-reads link within a CPU, which
+	is a ``from-reads internal'' (\co{fri}) link.
+	The term ``from-reads external'' (\co{fre}) link is used when
+	it is necessary to exclude the \co{fri} case.
+
+	See also ``Coherence'' and ``Reads-from''.
+
+  \item[Fully Ordered:]
+	An operation such as \co{smp_mb()} that orders all of
+	its CPU's prior accesses with all of that CPU's subsequent
+	accesses, or a marked access such as \co{atomic_add_return()}
+	that orders all of its CPU's prior accesses, itself, and
+	all of its CPU's subsequent accesses.
+
+  \item[Happens-Before (\tco{hb}):]
+	A relation between two accesses in which LKMM
+	guarantees the first access precedes the second.
+	For more detail, please see the ``THE HAPPENS-BEFORE RELATION: hb''
+	section of \path{explanation.txt}.
+
+  \item[Marked Access:]
+	An access to a variable that uses an special function or
+	macro such as \qtco{r1 = READ_ONCE(x)} or \qtco{smp_store_release(&a, 1)}.
+
+	See also ``Unmarked Access''.
+
+  \item[Pairing:]
+	``Memory-barrier pairing'' reflects the fact that synchronizing
+	data between two CPUs requires that both CPUs their accesses.
+	Memory barriers thus tend to come in pairs, one executed by
+	one of the CPUs and the other by the other CPU.
+	Of course, pairing also occurs with other types of operations,
+	so that a \co{smp_store_release()} pairs with an
+	\co{smp_load_acquire()} that reads the value stored.
+
+	See also ``Cycle''.
+
+  \item[Reads-From (\tco{rf}):]
+	When one CPU's load returns the value stored by some other
+	CPU, there is said to be a reads-from link from the second
+	CPU's store to the first CPU's load.
+	Reads-from links have the nice property that time must advance
+	from the store to the load, which means that algorithms using
+	reads-from links can use lighter weight ordering and
+	synchronization compared to algorithms using coherence and
+	from-reads links.
+
+	It is also possible to have a reads-from link within a CPU, which
+	is a ``reads-from internal'' (\co{rfi}) link.
+	The term ``reads-from external'' (\co{rfe}) link is used when it
+	is necessary to exclude	the \co{rfi} case.
+
+	See also ``Coherence'' and ``From-reads''.
+
+  \item[Relaxed:]
+	A marked access that does not imply ordering, for example, a
+	\co{READ_ONCE()}, \co{WRITE_ONCE()}, a non-value-returning
+	read-modify-write operation, or a value-returning
+	read-modify-write operation whose name ends in \qtco{_relaxed}.
+
+	See also ``Acquire'' and ``Release''.
+
+  \item[Release:]
+	With respect to a lock, releasing that lock, for example,
+	using \co{spin_unlock()}.
+	With respect to a non-lock shared variable, a special operation
+	that includes a store and which orders that store after earlier
+	memory references that ran on that same CPU\@.
+	An example special release store is \co{smp_store_release()}, but
+	\co{atomic_set_release()} and \co{atomic_cmpxchg_release()} also
+	include release stores.
+
+	See also ``Acquire'' and ``Relaxed''.
+
+  \item[Unmarked Access:]
+	An access to a variable that uses normal C-language
+	syntax, for example, \qtco{a = b[2];}.
+
+	See also ``Marked Access''.
+\end{description}
