@@ -382,6 +382,21 @@
 \newcommand{\tcresizewidth}[1]{#1}
 }
 
+% Borrowed from tcolorbox documentation
+\newtcolorbox{Note}[1][]{enhanced,
+  fontupper=\small,
+  before skip balanced=2mm,after skip balanced=3mm,
+  boxrule=0.4pt,left=5mm,right=2mm,top=1mm,bottom=1mm,
+  colback=blue!15,
+  colframe=blue!20!black,
+  sharp corners,rounded corners=southeast,arc is angular,arc=3mm,
+  underlay={%
+    \path[fill=tcbcolback!80!black] ([yshift=3mm]interior.south east)--++(-0.4,-0.1)--++(0.1,-0.2);
+    \path[draw=tcbcolframe,shorten <=-0.05mm,shorten >=-0.05mm] ([yshift=3mm]interior.south east)--++(-0.4,-0.1)--++(0.1,-0.2);
+    \path[fill=blue!50!black,draw=none] (interior.south west) rectangle node[white]{\Large\bfseries !} ([xshift=4mm]interior.north west);
+    },
+  drop fuzzy shadow,#1}
+
 \begin{document}
 
 %%HTMLSKIP
@@ -431,8 +446,6 @@
 \ignorespaces}{\ignorespacesafterend}
 \newenvironment{fcvref}[1][]{\renewcommand{\lnrefbase}{#1}%
 \ignorespaces}{\ignorespacesafterend}
-
-\newtcolorbox{Note}{fontupper=\small,boxsep=2mm,left=0mm,right=0mm,top=0mm,bottom=0mm,boxrule=.5pt}
 
 \frontmatter
 
