@@ -1,0 +1,308 @@
+\chapter{Control Dependencies}
+
+A major difficulty with control dependencies is that current compilers
+do not support them.
+One purpose of this document is therefore to help you prevent your
+compiler from breaking your code.
+However, control dependencies also pose other challenges, which leads to the
+second purpose of this document, namely to help you to avoid breaking
+your own code, even in the absence of help from your compiler.
+
+One such challenge is that control dependencies order only later stores.
+Therefore, a load-load control dependency will not preserve ordering
+unless a read memory barrier is provided.
+Consider the following code:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q)
+		p = READ_ONCE(b);
+\end{VerbatimU}
+
+This is not guaranteed to provide any ordering because some types of CPUs
+are permitted to predict the result of the load from~\qco{b}.
+This prediction can cause other CPUs to see this load as having happened
+before the load from~\qco{a}.
+This means that an explicit read barrier is required, for example as follows:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q) {
+		smp_rmb();
+		p = READ_ONCE(b);
+	}
+\end{VerbatimU}
+
+However, stores are not speculated.
+This means that ordering is (usually) guaranteed for load-store control
+dependencies, as in the following example:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q)
+		WRITE_ONCE(b, 1);
+\end{VerbatimU}
+
+Control dependencies can pair with each other and with other types
+of ordering.
+But please note that neither the \co{READ_ONCE()} nor the \co{WRITE_ONCE()}
+are optional.
+Without the \co{READ_ONCE()}, the compiler might fuse the load from~\qco{a}
+with other loads.
+Without the \co{WRITE_ONCE()}, the compiler might fuse the store to~\qco{b}
+with other stores.
+Worse yet, the compiler might convert the store into a load and a check followed
+by a store, and this compiler-generated load would not be ordered by
+the control dependency.
+
+Furthermore, if the compiler is able to prove that the value of
+variable~\qco{a} is always non-zero, it would be well within its rights
+to optimize the original example by eliminating the \qco{if} statement
+as follows:
+
+\begin{VerbatimU}
+	q = a;
+	b = 1;  /* BUG: Compiler and CPU can both reorder!!! */
+\end{VerbatimU}
+
+So don't leave out either the \co{READ_ONCE()} or the \co{WRITE_ONCE()}.
+In particular, although \co{READ_ONCE()} does force the compiler to emit a
+load, it does \emph{not} force the compiler to actually use the loaded value.
+
+It is tempting to try use control dependencies to enforce ordering on
+identical stores on both branches of the \qco{if} statement as follows:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q) {
+		barrier();
+		WRITE_ONCE(b, 1);
+		do_something();
+	} else {
+		barrier();
+		WRITE_ONCE(b, 1);
+		do_something_else();
+	}
+\end{VerbatimU}
+
+Unfortunately, current compilers will transform this as follows at high
+optimization levels:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	barrier();
+	WRITE_ONCE(b, 1);  /* BUG: No ordering vs. load from a!!! */
+	if (q) {
+		/* WRITE_ONCE(b, 1); -- moved up, BUG!!! */
+		do_something();
+	} else {
+		/* WRITE_ONCE(b, 1); -- moved up, BUG!!! */
+		do_something_else();
+	}
+\end{VerbatimU}
+
+Now there is no conditional between the load from~\qco{a} and the store
+to~\qco{b}, which means that the CPU is within its rights to reorder them:
+The conditional is absolutely required, and must be present in the final
+assembly code, after all of the compiler and link-time optimizations
+have been applied.
+Therefore, if you need ordering in this example, you must use explicit
+memory ordering, for example, \co{smp_store_release()}:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q) {
+		smp_store_release(&b, 1);
+		do_something();
+	} else {
+		smp_store_release(&b, 1);
+		do_something_else();
+	}
+\end{VerbatimU}
+
+Without explicit memory ordering, control-dependency-based ordering is
+guaranteed only when the stores differ, for example:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q) {
+		WRITE_ONCE(b, 1);
+		do_something();
+	} else {
+		WRITE_ONCE(b, 2);
+		do_something_else();
+	}
+\end{VerbatimU}
+
+The initial \co{READ_ONCE()} is still required to prevent the compiler from
+knowing too much about the value of~\qco{a}.
+
+But please note that you need to be careful what you do with the local
+variable~\qco{q}, otherwise the compiler might be able to guess the value
+and again remove the conditional branch that is absolutely required to
+preserve ordering.
+For example:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q % MAX) {
+		WRITE_ONCE(b, 1);
+		do_something();
+	} else {
+		WRITE_ONCE(b, 2);
+		do_something_else();
+	}
+\end{VerbatimU}
+
+If \co{MAX} is compile-time defined to be~1, then the compiler knows that
+\co{(q \% MAX)} must be equal to zero, regardless of the value of~\qco{q}.
+The compiler is therefore within its rights to transform the above code
+into the following:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	WRITE_ONCE(b, 2);
+	do_something_else();
+\end{VerbatimU}
+
+Given this transformation, the CPU is not required to respect the ordering
+between the load from variable~\qco{a} and the store to variable~\qco{b}.
+It is tempting to add a \co{barrier()}, but this does not help.
+The conditional is gone, and the barrier won't bring it back.
+Therefore, if you need to relying on control dependencies to produce
+this ordering, you should make sure that \co{MAX} is greater than one,
+perhaps as follows:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	BUILD_BUG_ON(MAX <= 1); /* Order load from a with store to b. */
+	if (q % MAX) {
+		WRITE_ONCE(b, 1);
+		do_something();
+	} else {
+		WRITE_ONCE(b, 2);
+		do_something_else();
+	}
+\end{VerbatimU}
+
+Please note once again that each leg of the \qco{if} statement absolutely
+must store different values to~\qco{b}.  As in previous examples, if the two
+values were identical, the compiler could pull this store outside of the
+\qco{if} statement, destroying the control dependency's ordering properties.
+
+You must also be careful avoid relying too much on boolean short-circuit
+evaluation.
+Consider this example:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q || 1 > 0)
+		WRITE_ONCE(b, 1);
+\end{VerbatimU}
+
+Because the first condition cannot fault and the second condition is
+always true, the compiler can transform this example as follows, again
+destroying the control dependency's ordering:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	WRITE_ONCE(b, 1);
+\end{VerbatimU}
+
+This is yet another example showing the importance of preventing the
+compiler from out-guessing your code.
+Again, although \co{READ_ONCE()} really does force the compiler to emit
+code for a given load, the compiler is within its rights to discard the
+loaded value.
+
+In addition, control dependencies apply only to the then-clause and
+else-clause of the \qco{if} statement in question.
+In particular, they do not necessarily order the code following the
+entire \qco{if} statement:
+
+\begin{VerbatimU}
+	q = READ_ONCE(a);
+	if (q) {
+		WRITE_ONCE(b, 1);
+	} else {
+		WRITE_ONCE(b, 2);
+	}
+	WRITE_ONCE(c, 1);  /* BUG: No ordering against the read from "a". */
+\end{VerbatimU}
+
+It is tempting to argue that there in fact is ordering because the
+compiler cannot reorder volatile accesses and also cannot reorder
+the writes to~\qco{b} with the condition.
+Unfortunately for this line of reasoning, the compiler might compile
+the two writes to~\qco{b} as conditional-move instructions, as in this
+fanciful pseudo-assembly language:
+
+\begin{VerbatimU}
+	ld r1,a
+	cmp r1,$0
+	cmov,ne r4,$1
+	cmov,eq r4,$2
+	st r4,b
+	st $1,c
+\end{VerbatimU}
+
+The control dependencies would then extend only to the pair of \co{cmov}
+instructions and the store depending on them.
+This means that a weakly ordered CPU would have no dependency of any sort
+between the load from~\qco{a} and the store to~\qco{c}.
+In short, control dependencies provide ordering only to the stores in
+the then-clause and else-clause of the \qco{if} statement in question
+(including functions invoked by those two clauses), and not to code
+following that \qco{if} statement.
+
+
+In summary:
+
+\begin{itemize}
+\item Control dependencies can order prior loads against later stores.
+      However, they do \emph{not} guarantee any other sort of ordering:
+      Not prior loads against later loads, nor prior stores against
+      later anything.
+      If you need these other forms of ordering, use \co{smp_load_acquire()},
+      \co{smp_store_release()}, or, in the case of prior stores and later
+      loads, \co{smp_mb()}.
+
+\item If both legs of the \qco{if} statement contain identical stores to
+      the same variable, then you must explicitly order those stores,
+      either by preceding both of them with \co{smp_mb()} or by using
+      \co{smp_store_release()}.
+      Please note that it is \emph{not} sufficient to use \co{barrier()}
+      at beginning and end of each leg of the \qco{if} statement
+      because, as shown by the example above, optimizing compilers can
+      destroy the control dependency while respecting the letter of the
+      \co{barrier()} law.
+
+\item Control dependencies require at least one run-time conditional
+      between the prior load and the subsequent store, and this
+      conditional must involve the prior load.
+      If the compiler is able to optimize the conditional away, it will
+      have also optimized away the ordering.
+      Careful use of \co{READ_ONCE()} and \co{WRITE_ONCE()} can help to
+      preserve the needed conditional.
+
+\item Control dependencies require that the compiler avoid reordering the
+      dependency into nonexistence.
+      Careful use of \co{READ_ONCE()} or \co{atomic\{,64\}_read()} can
+      help to preserve your control dependency.
+
+\item Control dependencies apply only to the then-clause and else-clause
+      of the \qco{if} statement containing the control dependency, including
+      any functions that these two clauses call.
+      Control dependencies do \emph{not} apply to code beyond the end
+      of that \qco{if} statement.
+
+\item Control dependencies pair normally with other types of barriers.
+
+\item Control dependencies do \emph{not} provide multicopy atomicity.
+      If you need all the CPUs to agree on the ordering of a given store
+      against all other accesses, use \co{smp_mb()}.
+
+\item Compilers do not understand control dependencies.
+      It is therefore your job to ensure that they do not break your code.
+
+\end{itemize}
