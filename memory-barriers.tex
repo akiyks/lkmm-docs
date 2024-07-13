@@ -640,7 +640,7 @@ Alpha).
 
 To deal with this, \co{READ_ONCE()} provides an implicit address-dependency
 barrier since kernel release v4.15
-(AD stands for ``address-dependency''):
+(\qco{addr-dep} stands for ``address-dependency''):
 
 \begin{VerbatimU}
 	CPU 1                 CPU 2
@@ -650,7 +650,7 @@ barrier since kernel release v4.15
 	<write barrier>
 	WRITE_ONCE(P, &B);
 	                      Q = READ_ONCE(P);
-	                      <implicit AD barrier>
+	                      <implicit addr-dep barrier>
 	                      D = *Q;
 \end{VerbatimU}
 
@@ -1007,7 +1007,7 @@ In summary:
  \item
       Control dependencies require that the compiler avoid reordering the
       dependency into nonexistence.
-      Careful use of \co{READ_ONCE()} or \co{atomic{,64}_read()} can help
+      Careful use of \co{READ_ONCE()} or \co{atomic\{,64\}_read()} can help
       to preserve your control dependency.
       Please see \cref{sec:Compiler barrier} for more information.
 
