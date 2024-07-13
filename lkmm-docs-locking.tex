@@ -1,0 +1,318 @@
+\chapter{Locking}
+
+Locking is well-known and the common use cases are straightforward:
+Any CPU holding a given lock sees any changes previously seen or made by any
+CPU before it previously released that same lock.
+This last sentence is the only part of this document that most developers
+will need to read.
+
+However, developers who would like to also access lock-protected shared
+variables outside of their corresponding locks should continue reading.
+
+
+\section{Locking and Prior Accesses}
+
+The basic rule of locking is worth repeating:
+
+\begin{quote}
+	Any CPU holding a given lock sees any changes previously seen
+	or made by any CPU before it previously released that same lock.
+\end{quote}
+
+Note that this statement is a bit stronger than ``Any CPU holding a
+given lock sees all changes made by any CPU during the time that CPU was
+previously holding this same lock''.
+For example, consider the following pair of code fragments:
+
+\begin{VerbatimU}
+	/* See MP+polocks.litmus. */
+	void CPU0(void)
+	{
+		WRITE_ONCE(x, 1);
+		spin_lock(&mylock);
+		WRITE_ONCE(y, 1);
+		spin_unlock(&mylock);
+	}
+
+	void CPU1(void)
+	{
+		spin_lock(&mylock);
+		r0 = READ_ONCE(y);
+		spin_unlock(&mylock);
+		r1 = READ_ONCE(x);
+	}
+\end{VerbatimU}
+
+The basic rule guarantees that if \co{CPU0()} acquires \co{mylock} before
+\co{CPU1()}, then both \co{r0} and \co{r1} must be set to the value~1.
+This also has the consequence that if the final value of \co{r0} is equal to~1,
+then the final value of \co{r1} must also be equal to~1.
+In contrast, the weaker rule would say nothing about the final value of \co{r1}.
+
+
+\section{Locking and Subsequent Accesses}
+
+The converse to the basic rule also holds:
+Any CPU holding a given lock will not see any changes that will be made
+by any CPU after it subsequently acquires this same lock.
+This converse statement is illustrated by the following litmus test:
+
+\begin{VerbatimU}
+	/* See MP+porevlocks.litmus. */
+	void CPU0(void)
+	{
+		r0 = READ_ONCE(y);
+		spin_lock(&mylock);
+		r1 = READ_ONCE(x);
+		spin_unlock(&mylock);
+	}
+
+	void CPU1(void)
+	{
+		spin_lock(&mylock);
+		WRITE_ONCE(x, 1);
+		spin_unlock(&mylock);
+		WRITE_ONCE(y, 1);
+	}
+\end{VerbatimU}
+
+This converse to the basic rule guarantees that if \co{CPU0()} acquires
+\co{mylock} before \co{CPU1()}, then both \co{r0} and \co{r1} must be set
+to the value~0.
+This also has the consequence that if the final value of \co{r1} is equal
+to~0, then the final value of \co{r0} must also be equal to~0.
+In contrast, the weaker rule would say nothing about the final value of \co{r0}.
+
+These examples show only a single pair of CPUs, but the effects of the
+locking basic rule extend across multiple acquisitions of a given lock
+across multiple CPUs.
+
+
+\section{Double-Checked Locking}
+
+It is well known that more than just a lock is required to make
+double-checked locking work correctly.
+This litmus test illustrates one incorrect approach:
+
+\begin{VerbatimU}
+	/* See Documentation/litmus-tests/locking/DCL-broken.litmus. */
+	void CPU0(void)
+	{
+		r0 = READ_ONCE(flag);
+		if (r0 == 0) {
+			spin_lock(&lck);
+			r1 = READ_ONCE(flag);
+			if (r1 == 0) {
+				WRITE_ONCE(data, 1);
+				WRITE_ONCE(flag, 1);
+			}
+			spin_unlock(&lck);
+		}
+		r2 = READ_ONCE(data);
+	}
+	/* CPU1() is the exactly the same as CPU0(). */
+\end{VerbatimU}
+
+There are two problems.
+First, there is no ordering between the first \co{READ_ONCE()} of \qco{flag}
+and the \co{READ_ONCE()} of \qco{data}.
+Second, there is no ordering between the two \co{WRITE_ONCE()} calls.
+It should therefore be no surprise that \qco{r2} can be zero, and a quick
+\co{herd7} run confirms this.
+
+One way to fix this is to use \co{smp_load_acquire()} and \co{smp_store_release()}
+as shown in this corrected version:
+
+\begin{VerbatimU}
+	/* See Documentation/litmus-tests/locking/DCL-fixed.litmus. */
+	void CPU0(void)
+	{
+		r0 = smp_load_acquire(&flag);
+		if (r0 == 0) {
+			spin_lock(&lck);
+			r1 = READ_ONCE(flag);
+			if (r1 == 0) {
+				WRITE_ONCE(data, 1);
+				smp_store_release(&flag, 1);
+			}
+			spin_unlock(&lck);
+		}
+		r2 = READ_ONCE(data);
+	}
+	/* CPU1() is the exactly the same as CPU0(). */
+\end{VerbatimU}
+
+The \co{smp_load_acquire()} guarantees that its load from \qco{flags} will
+be ordered before the \co{READ_ONCE()} from \qco{data}, thus solving the first
+problem.
+The \co{smp_store_release()} guarantees that its store will be
+ordered after the \co{WRITE_ONCE()} to \qco{data}, solving the second problem.
+The \co{smp_store_release()} pairs with the \co{smp_load_acquire()}, thus
+ensuring that the ordering provided by each actually takes effect.
+Again, a quick \co{herd7} run confirms this.
+
+In short, if you access a lock-protected variable without holding the
+corresponding lock, you will need to provide additional ordering, in
+this case, via the \co{smp_load_acquire()} and the \co{smp_store_release()}.
+
+
+\section{Ordering Provided by a Lock to CPUs Not Holding That Lock}
+
+It is not necessarily the case that accesses ordered by locking will be
+seen as ordered by CPUs not holding that lock.
+Consider this example:
+
+\begin{VerbatimU}
+	/* See Z6.0+pooncelock+pooncelock+pombonce.litmus. */
+	void CPU0(void)
+	{
+		spin_lock(&mylock);
+		WRITE_ONCE(x, 1);
+		WRITE_ONCE(y, 1);
+		spin_unlock(&mylock);
+	}
+
+	void CPU1(void)
+	{
+		spin_lock(&mylock);
+		r0 = READ_ONCE(y);
+		WRITE_ONCE(z, 1);
+		spin_unlock(&mylock);
+	}
+
+	void CPU2(void)
+	{
+		WRITE_ONCE(z, 2);
+		smp_mb();
+		r1 = READ_ONCE(x);
+	}
+\end{VerbatimU}
+
+Counter-intuitive though it might be, it is quite possible to have
+the final value of \co{r0} be~1, the final value of~\co{z} be~2, and the final
+value of \co{r1} be~0.
+The reason for this surprising outcome is that \co{CPU2()} never acquired
+the lock, and thus did not fully benefit from the lock's ordering properties.
+
+Ordering can be extended to CPUs not holding the lock by careful use
+of \co{smp_mb__after_spinlock()}:
+
+\begin{VerbatimU}
+	/* See Z6.0+pooncelock+poonceLock+pombonce.litmus. */
+	void CPU0(void)
+	{
+		spin_lock(&mylock);
+		WRITE_ONCE(x, 1);
+		WRITE_ONCE(y, 1);
+		spin_unlock(&mylock);
+	}
+
+	void CPU1(void)
+	{
+		spin_lock(&mylock);
+		smp_mb__after_spinlock();
+		r0 = READ_ONCE(y);
+		WRITE_ONCE(z, 1);
+		spin_unlock(&mylock);
+	}
+
+	void CPU2(void)
+	{
+		WRITE_ONCE(z, 2);
+		smp_mb();
+		r1 = READ_ONCE(x);
+	}
+\end{VerbatimU}
+
+This addition of \co{smp_mb__after_spinlock()} strengthens the lock
+acquisition sufficiently to rule out the counter-intuitive outcome.
+In other words, the addition of the \co{smp_mb__after_spinlock()} prohibits
+the counter-intuitive result where the final value of \co{r0} is~1, the final
+value of \co{z} is~2, and the final value of \co{r1} is~0.
+
+
+\section{No Roach-Motel Locking!}
+
+This example requires familiarity with the \co{herd7} \qco{filter} clause, so
+please read up on that topic in \path{litmus-tests.txt}.
+
+It is tempting to allow memory-reference instructions to be pulled
+into a critical section, but this cannot be allowed in the general case.
+For example, consider a spin loop preceding a lock-based critical section.
+Now, \co{herd7} does not model spin loops, but we can emulate one with two
+loads, with a \qco{filter} clause to constrain the first to return the
+initial value and the second to return the updated value, as shown below:
+
+\begin{VerbatimU}
+	/* See Documentation/litmus-tests/locking/RM-fixed.litmus. */
+	void CPU0(void)
+	{
+		spin_lock(&lck);
+		r2 = atomic_inc_return(&y);
+		WRITE_ONCE(x, 1);
+		spin_unlock(&lck);
+	}
+
+	void CPU1(void)
+	{
+		r0 = READ_ONCE(x);
+		r1 = READ_ONCE(x);
+		spin_lock(&lck);
+		r2 = atomic_inc_return(&y);
+		spin_unlock(&lck);
+	}
+
+	filter (1:r0=0 /\ 1:r1=1)
+	exists (1:r2=1)
+\end{VerbatimU}
+
+The variable~\qco{x} is the control variable for the emulated spin loop.
+\co{CPU0()} sets it to~\qco{1} while holding the lock, and \co{CPU1()}
+emulates the spin loop by reading it twice, first into \qco{1:r0}
+(which should get the initial value~\qco{0}) and then into \qco{1:r1}
+(which should get the updated value~\qco{1}).
+
+The \qco{filter} clause takes this into account, constraining \qco{1:r0} to
+equal~\qco{0} and \qco{1:r1} to equal~\qco{1}.
+
+Then the \qco{exists} clause checks to see if \co{CPU1()} acquired its lock
+first, which should not happen given the \co{filter} clause because \co{CPU0()}
+updates \qco{x} while holding the lock.
+And \co{herd7} confirms this.
+
+But suppose that the compiler was permitted to reorder the spin loop
+into \co{CPU1()}'s critical section, like this:
+
+\begin{VerbatimU}
+	/* See Documentation/litmus-tests/locking/RM-broken.litmus. */
+	void CPU0(void)
+	{
+		int r2;
+
+		spin_lock(&lck);
+		r2 = atomic_inc_return(&y);
+		WRITE_ONCE(x, 1);
+		spin_unlock(&lck);
+	}
+
+	void CPU1(void)
+	{
+		spin_lock(&lck);
+		r0 = READ_ONCE(x);
+		r1 = READ_ONCE(x);
+		r2 = atomic_inc_return(&y);
+		spin_unlock(&lck);
+	}
+
+	filter (1:r0=0 /\ 1:r1=1)
+	exists (1:r2=1)
+\end{VerbatimU}
+
+If \qco{1:r0} is equal to~\qco{0}, \qco{1:r1} can never equal~\qco{1}
+because \co{CPU0()} cannot update~\qco{x} while \co{CPU1()} holds the lock.
+And \co{herd7} confirms this, showing zero executions matching the \qco{filter}
+criteria.
+
+And this is why Linux-kernel lock and unlock primitives must prevent
+code from entering critical sections.
+It is not sufficient to only prevent code from leaving them.
