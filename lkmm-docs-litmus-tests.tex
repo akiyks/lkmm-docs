@@ -1,0 +1,1261 @@
+\chapter{Linux-Kernel Memory Model Litmus Tests}
+
+This file describes the LKMM litmus-test format by example, describes
+some tricks and traps, and finally outlines LKMM's limitations.
+Earlier versions of this material appeared in a number of LWN articles,
+including:
+
+\begin{description}[style=nextline]
+ \item[A formal kernel memory-ordering model (part 2)]
+	\url{https://lwn.net/Articles/720550/}
+ \item[Axiomatic validation of memory barriers and atomic instructions]
+	\url{https://lwn.net/Articles/608550/}
+ \item[Validating Memory Barriers and Atomic Instructions]
+	\url{https://lwn.net/Articles/470681/}
+\end{description}
+
+This document presents information in decreasing order of applicability,
+so that, where possible, the information that has proven more commonly
+useful is shown near the beginning.
+
+For information on installing LKMM, including the underlying \qco{herd7}
+tool, please see \path{tools/memory-model/README}.
+
+
+\section{Copy-Pasta}
+
+As with other software, it is often better (if less macho) to adapt an
+existing litmus test than it is to create one from scratch.
+A number of litmus tests may be found in the kernel source tree:
+
+\begin{itemize}
+  \item \path{tools/memory-model/litmus-tests/}
+  \item \path{Documentation/litmus-tests/}
+\end{itemize}
+
+Several thousand more example litmus tests are available on github
+and kernel.org:
+
+\begin{itemize}
+  \item \url{https://github.com/paulmckrcu/litmus}
+  \item \url{https://git.kernel.org/pub/scm/linux/kernel/git/paulmck/perfbook.git/tree/CodeSamples/formal/herd}
+  \item \url{https://git.kernel.org/pub/scm/linux/kernel/git/paulmck/perfbook.git/tree/CodeSamples/formal/litmus}
+\end{itemize}
+
+The \co{-l} and \co{-L} arguments to \qco{git grep} can be quite helpful
+in identifying existing litmus tests that are similar to the one you need.
+But even if you start with an existing litmus test, it is still helpful
+to have a good understanding of the litmus-test format.
+
+
+\section{Examples and Format}
+
+This section describes the overall format of litmus tests, starting
+with a small example of the message-passing pattern and moving on to
+more complex examples that illustrate explicit initialization and LKMM's
+minimalistic set of flow-control statements.
+
+
+\subsection{Message-Passing Example}
+
+This section gives an overview of the format of a litmus test using an
+example based on the common message-passing use case.
+This use case appears often in the Linux kernel.
+For example, a flag (modeled by~\qco{y} below) indicates that a buffer
+(modeled by~\qco{x} below) is now completely filled in and ready for use.
+It would be very bad if the consumer saw the flag set, but, due to memory
+misordering, saw old values in the buffer.
+
+This example asks whether \co{smp_store_release()} and \co{smp_load_acquire()}
+suffices to avoid this bad outcome:
+
+\begin{fcvlabel}[ln:docs:litmus:MP]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	C MP+pooncerelease+poacquireonce  %lnlbl@C$
+
+	{}    %lnlbl@init$
+
+	P0(int *x, int *y)   %lnlbl@P0:b$
+	{
+		WRITE_ONCE(*x, 1);   %lnlbl@P0:x$
+		smp_store_release(y, 1);   %lnlbl@P0:y$
+	}   %lnlbl@P0:e$
+
+	P1(int *x, int *y)   %lnlbl@P1:b$
+	{
+		int r0;   %lnlbl@P1:r0$
+		int r1;   %lnlbl@P1:r1$
+
+		r0 = smp_load_acquire(y);   %lnlbl@P1:y$
+		r1 = READ_ONCE(*x);    %lnlbl@P1:x$
+	}   %lnlbl@P1:e$
+
+	exists (1:r0=1 /\ 1:r1=0)  %lnlbl@exists$
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:docs:litmus:MP]
+\Clnref{C} starts with~\qco{C}, which identifies this file as being in the
+LKMM C-language format (which, as we will see, is a small fragment
+of the full C language).
+The remainder of \clnref{C} is the name of the test, which by convention
+is the filename with the \qco{.litmus} suffix stripped.
+In this case, the actual test may be found in
+\path{tools/memory-model/litmus-tests/MP+pooncerelease+poacquireonce.litmus}
+in the Linux-kernel source tree.
+
+Mechanically generated litmus tests will often have an optional
+double-quoted comment string on the second line.
+Such strings are ignored when running the test.
+Yes, you can add your own comments to litmus tests, but this is a bit
+involved due to the use of multiple parsers.
+For now, you can use C-language comments in the C code, and these comments
+may be in either the \qco{/* */} or the \qco{//} style.
+A later section will cover the full litmus-test commenting story.
+
+\Clnref{init} is the initialization section.
+Because the default initialization to zero suffices for this test,
+the~\qco{\{\}} syntax is used, which mean the initialization section is empty.
+Litmus tests requiring non-default initialization must have non-empty
+initialization sections, as in the example that will be presented later
+in this document.
+
+\Clnref{P0:b,P0:e} show the first process and \clnref{P1:b,P1:e} the
+second process.
+Each process corresponds to a Linux-kernel task (or kthread, workqueue, thread,
+and so on; LKMM discussions often use these terms interchangeably).
+The name of the first process is~\qco{P0} and that of the second~\qco{P1}.
+You can name your processes anything you like as long as the names consist
+of a single~\qco{P} followed by a number, and as long as the numbers are
+consecutive starting with zero.
+This can actually be quite helpful, for example, a \co{.litmus} file
+matching \qco{^P1(} but not matching \qco{^P2(} must contain a two-process
+litmus test.
+
+The argument list for each function are pointers to the global variables
+used by that function.
+Unlike normal C-language function parameters, the names are significant.
+The fact that both \co{P0()} and \co{P1()} have a formal parameter
+named~\qco{x} means that these two processes are working with the
+same global variable, also named~\qco{x}.
+So the \qco{int *x, int *y} on \co{P0()} and \co{P1()} mean that both
+processes are working with two shared global variables, \qco{x} and~\qco{y}.
+Global variables are always passed to processes by reference, hence
+\qco{P0(int *x, int *y)}, but \emph{never} \qco{P0(int x, int y)}.
+
+\co{P0()} has no local variables, but \co{P1()} has two of them
+named~\qco{r0} and~\qco{r1}.
+These names may be freely chosen, but for historical reasons stemming from
+other litmus-test formats, it is conventional to use names consisting
+of~\qco{r} followed by a number as shown here.
+A common bug in litmus tests is forgetting to add a global variable to
+a process's parameter list.
+This will sometimes result in an error message, but can also cause the
+intended global to instead be silently treated as an undeclared local
+variable.
+
+Each process's code is similar to Linux-kernel C, as can be seen on
+lines \lnref{P0:x}--\lnref{P0:y} and \lnref{P1:r0}--\lnref{P1:x}.
+This code may use many of the Linux kernel's atomic operations, some
+of its exclusive-lock functions, and some of its RCU and SRCU functions.
+An approximate list of the currently supported functions may be found in
+the \path{linux-kernel.def} file.
+
+The \co{P0()} process does \qtco{WRITE_ONCE(*x, 1)} on \clnref{P0:x}.
+Because \qco{x}~is a pointer in \co{P0()}'s parameter list, this does an
+unordered store to global variable~\qco{x}.
+\Clnref{P0:y} does \qtco{smp_store_release(y, 1)}, and because \qco{y}~is
+also in \co{P0()}'s parameter list, this does a release store to global
+variable~\qco{y}.
+
+The \co{P1()} process declares two local variables on \clnref{P1:r0,P1:r1}.
+\Clnref{P1:y} does \qtco{r0 = smp_load_acquire(y)} which does an acquire load
+from global variable~\qco{y} into local variable~\qco{r0}.
+\Clnref{P1:x} does a \qtco{r1 = READ_ONCE(*x)}, which does an unordered
+load from~\qco{*x} into local variable~\qco{r1}.
+Both \qco{x}~and~\qco{y} are in \co{P1()}'s parameter list, so both
+reference the same global variables that are used by \co{P0()}.
+
+\Clnref{exists} is the \qco{exists} assertion expression to evaluate
+the final state.
+This final state is evaluated after the dust has settled; both processes
+have completed and all of their memory references and memory barriers
+have propagated to all parts of the system.
+The references to the local variables~\qco{r0} and~\qco{r1} in \clnref{exists}
+must be prefixed with \qco{1:} to specify which process they are local to.
+
+Note that the assertion expression is written in the litmus-test
+language rather than in~C.
+For example, single~\qco{=} is an equality operator rather than an assignment.
+The ``\co{/\\}'' character combination means ``and''.
+Similarly, ``\co{\\/}'' stands for ``or''.
+Both of these are ASCII-art representations of the corresponding
+mathematical symbols.
+Finally, \qco{\~} stands for ``logical not'', which is~\qco{\!} in~C,
+and not to be confused with the C-language \qco{\~}~operator which instead
+stands for ``bitwise not''.
+Parentheses may be used to override precedence.
+
+The \qco{exists} assertion on \clnref{exists} is satisfied if the consumer
+sees the flag (\qco{y}) set but the buffer (\qco{x}) as not yet filled in,
+that is, if \co{P1()} loaded a value from~\qco{x} that was equal to~1
+but loaded a value from~\qco{y} that was still equal to zero.
+\end{fcvref}
+
+This example can be checked by running the following command, which
+absolutely must be run from the \path{tools/memory-model} directory and from
+this directory only:
+
+\begin{VerbatimU}[breaklines=true]
+herd7 -conf linux-kernel.cfg litmus-tests/MP+pooncerelease+poacquireonce.litmus
+\end{VerbatimU}
+
+The output is the result of something similar to a full state-space
+search, and is as follows:
+
+\begin{fcvlabel}[ln:docs:litmus:MPout]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	Test MP+pooncerelease+poacquireonce Allowed  %lnlbl@name$
+	States 3          %lnlbl@stat:b$
+	1:r0=0; 1:r1=0;
+	1:r0=0; 1:r1=1;
+	1:r0=1; 1:r1=1;   %lnlbl@stat:e$
+	No                %lnlbl@no$
+	Witnesses         %lnlbl@witness$
+	Positive: 0 Negative: 3    %lnlbl@posneg$
+	Condition exists (1:r0=1 /\ 1:r1=0)   %lnlbl@exists$
+	Observation MP+pooncerelease+poacquireonce Never 0 3   %lnlbl@obs$
+	Time MP+pooncerelease+poacquireonce 0.00   %lnlbl@time$
+	Hash=579aaa14d8c35a39429b02e698241d09      %lnlbl@hash$
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:docs:litmus:MPout]
+The most pertinent line is \clnref{obs}, which contains \qco{Never 0 3}, which
+indicates that the bad result flagged by the \qco{exists} clause never
+happens.
+This line might instead say \qco{Sometimes} to indicate that the
+bad result happened in some but not all executions, or it might say
+\qco{Always} to indicate that the bad result happened in all executions.
+(The \co{herd7} tool doesn't judge, so it is only an LKMM convention that the
+\qco{exists} clause indicates a bad result.
+To see this, invert the \qco{exists} clause's condition and run the test.)
+The numbers (\qco{0 3}) at the end of this line indicate the number of end
+states satisfying the \qco{exists} clause (0) and the number not not
+satisfying that clause (3).
+
+Another important part of this output is shown in \clnrefrange{stat:b}{stat:e},
+repeated here:
+\end{fcvref}
+
+\begin{fcvlabel}[ln:docs:litmus:MPoutpart]
+\begin{VerbatimN}[commandchars=\%\@\$,firstnumber=2]
+	States 3         %lnlbl@stat:b$
+	1:r0=0; 1:r1=0;  %lnlbl@stat:00$
+	1:r0=0; 1:r1=1;  %lnlbl@stat:01$
+	1:r0=1; 1:r1=1;  %lnlbl@stat:11$
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:docs:litmus:MPoutpart]
+\Clnref{stat:b} gives the total number of end states, and each of
+\clnrefrange{stat:00}{stat:11} list one of these states, with the first
+(\qco{1:r0=0; 1:r1=0;}) indicating that both of \co{P1()}'s loads returned
+the value~\qco{0}.
+\end{fcvref}
+\begin{fcvref}[ln:docs:litmus:MPout]
+As expected, given the \qco{Never} on \clnref{obs}, the state flagged by
+the \qco{exists} clause is not listed.
+This full list of states can be helpful when debugging a new litmus test.
+
+The rest of the output is not normally needed, either due to irrelevance
+or due to being redundant with the lines discussed above.
+However, the following paragraph lists them for the benefit of readers
+possessed of an insatiable curiosity.
+Other readers should feel free to skip ahead.
+
+\Clnref{name} echos the test name, along with the \qco{Test} and \qco{Allowed}.
+\Clnref{no}'s \qco{No} says that the \qco{exists} clause was not satisfied by
+any execution, and as such it has the same meaning as \clnref{obs}'s \qco{Never}.
+\Clnref{witness} is a lead-in to \clnref{posneg}'s \qco{Positive: 0 Negative: 3},
+which lists the number of end states satisfying and not satisfying the
+\qco{exists} clause, just like the two numbers at the end of \clnref{obs}.
+\Clnref{exists} repeats the \qco{exists} clause so that you don't have to
+look it up in the litmus-test file.
+The number at the end of \clnref{time} (which begins with \qco{Time}) gives the
+time in seconds required to analyze the litmus test.
+Small tests such as this one complete in a few milliseconds, so \qco{0.00}
+is quite common.
+\Clnref{hash} gives a hash of the contents for the litmus-test file, and is used
+by tooling that manages litmus tests and their output.
+This tooling is used by people modifying LKMM itself, and among other things
+lets such people know which of the several thousand relevant litmus tests were
+affected by a given change to LKMM\@.
+\end{fcvref}
+
+
+\subsection{Initialization}
+
+The previous example relied on the default zero initialization for~\qco{x}
+and~\qco{y}, but a similar litmus test could instead initialize them
+to some other value:
+
+\begin{fcvlabel}[ln:docs:litmus:MPinit]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	C MP+pooncerelease+poacquireonce
+
+	{               %lnlbl@init:b$
+		x=42;
+		y=42;
+	}               %lnlbl@init:e$
+
+	P0(int *x, int *y)
+	{
+		WRITE_ONCE(*x, 1);
+		smp_store_release(y, 1);
+	}
+
+	P1(int *x, int *y)
+	{
+		int r0;
+		int r1;
+
+		r0 = smp_load_acquire(y);
+		r1 = READ_ONCE(*x);
+	}
+
+	exists (1:r0=1 /\ 1:r1=42)   %lnlbl@exists$
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:docs:litmus:MPinit]
+\Clnrefrange{init:b}{init:e} now initialize both~\qco{x} and~\qco{y} to
+the value~42.
+This also means that the \qco{exists} clause on \clnref{exists} must change
+\qco{1:r1=0} to \qco{1:r1=42}.
+\end{fcvref}
+
+Running the test gives the same overall result as before, but with the
+value~42 appearing in place of the value zero:
+
+\begin{VerbatimN}
+	Test MP+pooncerelease+poacquireonce Allowed
+	States 3
+	1:r0=1; 1:r1=1;
+	1:r0=42; 1:r1=1;
+	1:r0=42; 1:r1=42;
+	No
+	Witnesses
+	Positive: 0 Negative: 3
+	Condition exists (1:r0=1 /\ 1:r1=42)
+	Observation MP+pooncerelease+poacquireonce Never 0 3
+	Time MP+pooncerelease+poacquireonce 0.02
+	Hash=ab9a9b7940a75a792266be279a980156
+\end{VerbatimN}
+
+It is tempting to avoid the open-coded repetitions of the value~\qco{42}
+by defining another global variable \qco{initval=42} and replacing all
+occurrences of \qco{42} with \qco{initval}.
+This will not, repeat \emph{not}, initialize~\qco{x} and~\qco{y} to 42,
+but instead to the address of \qco{initval} (try it!).
+See the section below on linked lists to learn more about why this approach
+to initialization can be useful.
+
+
+\subsection{Control Structures}
+
+LKMM supports the C-language \qco{if} statement, which allows modeling of
+conditional branches.
+In LKMM, conditional branches can affect ordering, but only if you are
+\emph{very} careful (compilers are surprisingly able to optimize away
+conditional branches).
+The following example shows the ``load buffering'' (LB) use case that is
+used in the Linux kernel to synchronize between ring-buffer producers and
+consumers.
+In the example below, \co{P0()} is one side checking to see if an operation
+may proceed and \co{P1()} is the other side completing its update.
+
+\begin{fcvlabel}[ln:docs:litmus:LB]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	C LB+fencembonceonce+ctrlonceonce
+
+	{}
+
+	P0(int *x, int *y)
+	{
+		int r0;
+
+		r0 = READ_ONCE(*x);         %lnlbl@read$
+		if (r0)                     %lnlbl@if$
+			WRITE_ONCE(*y, 1);  %lnlbl@write$
+	}
+
+	P1(int *x, int *y)
+	{
+		int r0;
+
+		r0 = READ_ONCE(*y);
+		smp_mb();
+		WRITE_ONCE(*x, 1);
+	}
+
+	exists (0:r0=1 /\ 1:r0=1)      %lnlbl@exists$
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:docs:litmus:LB]
+\co{P1()}'s \qco{if} statement on \clnref{if} works as expected, so that
+\clnref{write} is executed only if \clnref{read} loads a non-zero value
+from~\qco{x}.
+Because \co{P1()}'s write of~\qco{1} to~\qco{x} happens only after
+\co{P1()}'s read from~\qco{y}, one would hope that the \qco{exists} clause
+cannot be satisfied.
+\end{fcvref}
+LKMM agrees:
+
+\begin{VerbatimN}
+	Test LB+fencembonceonce+ctrlonceonce Allowed
+	States 2
+	0:r0=0; 1:r0=0;
+	0:r0=1; 1:r0=0;
+	No
+	Witnesses
+	Positive: 0 Negative: 2
+	Condition exists (0:r0=1 /\ 1:r0=1)
+	Observation LB+fencembonceonce+ctrlonceonce Never 0 2
+	Time LB+fencembonceonce+ctrlonceonce 0.00
+	Hash=e5260556f6de495fd39b556d1b831c3b
+\end{VerbatimN}
+
+However, there is no \qco{while} statement due to the fact that full
+state-space search has some difficulty with iteration.
+However, there are tricks that may be used to handle some special cases,
+which are discussed below.
+In addition, loop-unrolling tricks may be applied, albeit sparingly.
+
+
+\section{Tricks and Traps}
+
+This section covers extracting debug output from \co{herd7}, emulating
+spin loops, handling trivial linked lists, adding comments to litmus tests,
+emulating \co{call_rcu()}, and finally tricks to improve \co{herd7} performance
+in order to better handle large litmus tests.
+
+
+\subsection{Debug Output}
+
+By default, the \co{herd7} state output includes all variables mentioned
+in the \qco{exists} clause.
+But sometimes debugging efforts are greatly aided by the values of other
+variables.
+Consider this litmus test
+(\path{tools/memory-order/litmus-tests/SB+rfionceonce-poonceonces.litmus}
+but
+slightly modified), which probes an obscure corner of hardware memory ordering:
+
+\begin{VerbatimN}[commandchars=\%\@\$]
+	C SB+rfionceonce-poonceonces
+
+	{}
+
+	P0(int *x, int *y)
+	{
+		int r1;
+		int r2;
+
+		WRITE_ONCE(*x, 1);
+		r1 = READ_ONCE(*x);
+		r2 = READ_ONCE(*y);
+	}
+
+	P1(int *x, int *y)
+	{
+		int r3;
+		int r4;
+
+		WRITE_ONCE(*y, 1);
+		r3 = READ_ONCE(*y);
+		r4 = READ_ONCE(*x);
+	}
+
+	exists (0:r2=0 /\ 1:r4=0)
+\end{VerbatimN}
+
+The \co{herd7} output is as follows:
+
+\begin{VerbatimN}
+	Test SB+rfionceonce-poonceonces Allowed
+	States 4
+	0:r2=0; 1:r4=0;
+	0:r2=0; 1:r4=1;
+	0:r2=1; 1:r4=0;
+	0:r2=1; 1:r4=1;
+	Ok
+	Witnesses
+	Positive: 1 Negative: 3
+	Condition exists (0:r2=0 /\ 1:r4=0)
+	Observation SB+rfionceonce-poonceonces Sometimes 1 3
+	Time SB+rfionceonce-poonceonces 0.01
+	Hash=c7f30fe0faebb7d565405d55b7318ada
+\end{VerbatimN}
+
+(This output indicates that CPUs are permitted to ``snoop their own
+store buffers'', which all of Linux's CPU families other than s390 will
+happily do.
+Such snooping results in disagreement among CPUs on the order of stores
+from different CPUs, which is rarely an issue.)
+
+But the \co{herd7} output shows only the two variables mentioned in the
+\qco{exists} clause.
+Someone modifying this test might wish to know the values of~\qco{x},
+\qco{y}, \qco{0:r1}, and \qco{0:r3} as well.
+\begin{fcvref}[ln:docs:litmus:SBloc]
+The \qco{locations} statement on \clnref{loc} shows how to cause \co{herd7} to
+display additional variables:
+\end{fcvref}
+
+\begin{fcvlabel}[ln:docs:litmus:SBloc]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	C SB+rfionceonce-poonceonces
+
+	{}
+
+	P0(int *x, int *y)
+	{
+		int r1;
+		int r2;
+
+		WRITE_ONCE(*x, 1);
+		r1 = READ_ONCE(*x);
+		r2 = READ_ONCE(*y);
+	}
+
+	P1(int *x, int *y)
+	{
+		int r3;
+		int r4;
+
+		WRITE_ONCE(*y, 1);
+		r3 = READ_ONCE(*y);
+		r4 = READ_ONCE(*x);
+	}
+
+	locations [0:r1; 1:r3; x; y]    %lnlbl@loc$
+	exists (0:r2=0 /\ 1:r4=0)
+\end{VerbatimN}
+\end{fcvlabel}
+
+The \co{herd7} output then displays the values of all the variables:
+
+\begin{VerbatimN}
+	Test SB+rfionceonce-poonceonces Allowed
+	States 4
+	0:r1=1; 0:r2=0; 1:r3=1; 1:r4=0; x=1; y=1;
+	0:r1=1; 0:r2=0; 1:r3=1; 1:r4=1; x=1; y=1;
+	0:r1=1; 0:r2=1; 1:r3=1; 1:r4=0; x=1; y=1;
+	0:r1=1; 0:r2=1; 1:r3=1; 1:r4=1; x=1; y=1;
+	Ok
+	Witnesses
+	Positive: 1 Negative: 3
+	Condition exists (0:r2=0 /\ 1:r4=0)
+	Observation SB+rfionceonce-poonceonces Sometimes 1 3
+	Time SB+rfionceonce-poonceonces 0.01
+	Hash=40de8418c4b395388f6501cafd1ed38d
+\end{VerbatimN}
+
+What if you would like to know the value of a particular global variable
+at some particular point in a given process's execution?
+One approach is to use a \co{READ_ONCE()} to load that global variable
+into a new local variable, then add that local variable to the \qco{locations}
+clause.
+But be careful:
+In some litmus tests, adding a \co{READ_ONCE()} will change the outcome!
+For one example, please see the \path{C-READ_ONCE.litmus} and
+\path{C-READ_ONCE-omitted.litmus} tests located here:
+
+\begin{itemize}
+  \item	\url{https://github.com/paulmckrcu/litmus/blob/master/manual/kernel/}
+\end{itemize}
+
+
+\subsection{Spin Loops}
+
+The analysis carried out by \co{herd7} explores full state space, which is
+at best of exponential time complexity.
+Adding processes and increasing the amount of code in a give process can
+greatly increase execution time.
+Potentially infinite loops, such as those used to wait for locks to become
+available, are clearly problematic.
+
+Fortunately, it is possible to avoid state-space explosion by specially
+modeling such loops.
+For example, the following litmus tests emulates locking using
+\co{xchg_acquire()}, but instead of enclosing \co{xchg_acquire()}
+in a spin loop, it instead excludes executions that fail to acquire the
+lock using a \co{herd7} \qco{filter} clause.
+Note that for exclusive locking, you are better off using the \co{spin_lock()}
+and \co{spin_unlock()} that LKMM directly models, if for no other reason
+that these are much faster.
+However, the techniques illustrated in this section can be used for other
+purposes, such as emulating reader-writer locking, which LKMM does not yet
+model.
+
+\begin{fcvlabel}[ln:docs:litmus:SBemuspin]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	C C-SB+l-o-o-u+l-o-o-u-X
+
+	{
+	}
+
+	P0(int *sl, int *x0, int *x1)
+	{
+		int r2;
+		int r1;
+
+		r2 = xchg_acquire(sl, 1);   %lnlbl@xchgacq$
+		WRITE_ONCE(*x0, 1);         %lnlbl@write$
+		r1 = READ_ONCE(*x1);        %lnlbl@read$
+		smp_store_release(sl, 0);   %lnlbl@release$
+	}
+
+	P1(int *sl, int *x0, int *x1)
+	{
+		int r2;
+		int r1;
+
+		r2 = xchg_acquire(sl, 1);
+		WRITE_ONCE(*x1, 1);
+		r1 = READ_ONCE(*x0);
+		smp_store_release(sl, 0);
+}
+
+	filter (0:r2=0 /\ 1:r2=0)        %lnlbl@filter$
+	exists (0:r1=0 /\ 1:r1=0)
+\end{VerbatimN}
+\end{fcvlabel}
+
+This litmus test may be found here:
+
+\begin{itemize}
+\item \url{https://git.kernel.org/pub/scm/linux/kernel/git/paulmck/perfbook.git/tree/CodeSamples/formal/herd/C-SB+l-o-o-u+l-o-o-u-X.litmus}
+\end{itemize}
+
+This test uses two global variables, \qco{x1} and~\qco{x2}, and also
+emulates a single global spinlock named~\qco{sl}.
+This spinlock is held by whichever process changes the value of~qco{sl}
+from~\qco{0} to~\qco{1}, and is released when that process sets~\qco{sl}
+back to~\qco{0}.
+\begin{fcvref}[ln:docs:litmus:SBemuspin]
+\co{P0()}'s lock acquisition is emulated on \clnref{xchgacq} using
+\co{xchg_acquire()}, which unconditionally stores the value~\qco{1} to~\qco{sl}
+and stores either~\qco{0} or~\qco{1} to~\qco{r2}, depending on whether
+the lock acquisition was successful or unsuccessful (due to \qco{sl} already
+having the value~\qco{1}), respectively.
+\co{P1()} operates in a similar manner.
+
+Rather unconventionally, execution appears to proceed to the critical
+section on \clnref{write,read} in either case.
+\Clnref{release} then uses an \co{smp_store_release()} to store zero
+to~\qco{sl}, thus emulating lock release.
+
+The case where \co{xchg_acquire()} fails to acquire the lock is handled by
+the \qco{filter} clause on \clnref{filter}, which tells \co{herd7} to keep
+only those executions in which both \qco{0:r2} and \qco{1:r2} are zero,
+that is to pay attention only to those executions in which both locks
+are actually acquired.
+Thus, the bogus executions that would execute the critical sections are
+discarded and any effects that they might have had are ignored.
+Note well that the \qco{filter} clause keeps those executions for which
+its expression is satisfied, that is, for which the expression evaluates
+to true.
+In other words, the \qco{filter} clause says what to keep, not what to discard.
+\end{fcvref}
+
+The result of running this test is as follows:
+
+\begin{fcvlabel}[ln:docs:litmus:SBemuspinout]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	Test C-SB+l-o-o-u+l-o-o-u-X Allowed
+	States 2
+	0:r1=0; 1:r1=1;
+	0:r1=1; 1:r1=0;
+	No
+	Witnesses
+	Positive: 0 Negative: 2
+	Condition exists (0:r1=0 /\ 1:r1=0)
+	Observation C-SB+l-o-o-u+l-o-o-u-X Never 0 2   %lnlbl@obs$
+	Time C-SB+l-o-o-u+l-o-o-u-X 0.03
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:docs:litmus:SBemuspinout]
+The \qco{Never} on \clnref{obs} indicates that this use of \co{xchg_acquire()}
+and \co{smp_store_release()} really does correctly emulate locking.
+\end{fcvref}
+
+Why doesn't the litmus test take the simpler approach of using a spin loop
+to handle failed spinlock acquisitions, like the kernel does?
+The key insight behind this litmus test is that spin loops have no effect
+on the possible \qco{exists}-clause outcomes of program execution in the absence
+of deadlock.
+In other words, given a high-quality lock-acquisition primitive in a
+deadlock-free program running on high-quality hardware, each lock
+acquisition will eventually succeed.
+Because \co{herd7} already explores the full state space, the length of
+time required to actually acquire the lock does not matter.
+After all, \co{herd7} already models all possible durations of the
+\co{xchg_acquire()} statements.
+
+Why not just add the \qco{filter} clause to the \qco{exists} clause, thus
+avoiding the \qco{filter} clause entirely?
+This does work, but is slower.
+The reason that the \qco{filter} clause is faster is that (in the common case)
+\co{herd7} knows to abandon an execution as soon as the \qco{filter} expression
+fails to be satisfied.
+In contrast, the \qco{exists} clause is evaluated only at the end of time,
+thus requiring \co{herd7} to waste time on bogus executions in which both
+critical sections proceed concurrently.
+In addition, some LKMM users like the separation of concerns provided by
+using the both the \qco{filter} and \qco{exists} clauses.
+
+Readers lacking a pathological interest in odd corner cases should feel
+free to skip the remainder of this section.
+
+But what if the litmus test were to temporarily set \qco{0:r2} to a non-zero
+value?
+Wouldn't that cause \co{herd7} to abandon the execution prematurely
+due to an early mismatch of the \qco{filter} clause?
+
+Why not just try it?
+\begin{fcvref}[ln:docs:litmus:SBemumod]
+\Clnref{x2} of the following modified litmus test
+introduces a new global variable~\qco{x2} that is initialized to~\qco{1}.
+\Clnref{P1:r2} of \co{P1()} reads that variable into \qco{1:r2} to force
+an early mismatch with the \qco{filter} clause.
+\Clnref{P1:if} does a known-true "if" condition to avoid and static analysis
+that \co{herd7} might do.
+Finally the \qco{exists} clause on \clnref{exists} is updated to a condition
+that is alway satisfied at the end of the test.
+
+\begin{fcvlabel}[ln:docs:litmus:SBemumod]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	C C-SB+l-o-o-u+l-o-o-u-X
+
+	{
+		x2=1;    %lnlbl@x2$
+	}
+
+	P0(int *sl, int *x0, int *x1)
+	{
+		int r2;
+		int r1;
+
+		r2 = xchg_acquire(sl, 1);
+		WRITE_ONCE(*x0, 1);
+		r1 = READ_ONCE(*x1);
+		smp_store_release(sl, 0);
+	}
+
+	P1(int *sl, int *x0, int *x1, int *x2)
+	{
+		int r2;
+		int r1;
+
+		r2 = READ_ONCE(*x2);    %lnlbl@P1:r2$
+		if (r2)                 %lnlbl@P1:if$
+			r2 = xchg_acquire(sl, 1);
+		WRITE_ONCE(*x1, 1);
+		r1 = READ_ONCE(*x0);
+		smp_store_release(sl, 0);
+	}
+
+	filter (0:r2=0 /\ 1:r2=0)
+	exists (x1=1)                  %lnlbl@exists$
+\end{VerbatimN}
+\end{fcvlabel}
+
+If the \qco{filter} clause were to check each variable at each point in the
+execution, running this litmus test would display no executions because
+all executions would be filtered out at \clnref{P1:r2}.
+\end{fcvref}
+However, the output is instead as follows:
+
+\begin{fcvlabel}[ln:docs:litmus:SBNemumodout]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	Test C-SB+l-o-o-u+l-o-o-u-X Allowed
+	States 1
+	x1=1;                 %lnlbl@stat$
+	Ok
+	Witnesses
+	Positive: 2 Negative: 0
+	Condition exists (x1=1)
+	Observation C-SB+l-o-o-u+l-o-o-u-X Always 2 0
+	Time C-SB+l-o-o-u+l-o-o-u-X 0.04
+	Hash=080bc508da7f291e122c6de76c0088e3
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:docs:litmus:SBNemumodout]
+\Clnref{stat} shows that there is one execution that did not get filtered out,
+so the \qco{filter} clause is evaluated only on the last assignment to
+the variables that it checks.
+In this case, the \qco{filter} clause is a disjunction, so it might be
+evaluated twice, once at the final (and only) assignment to \qco{0:r2}
+and once at the final assignment to \qco{1:r2}.
+\end{fcvref}
+
+
+\subsection{Linked Lists}
+
+LKMM can handle linked lists, but only linked lists in which each node
+contains nothing except a pointer to the next node in the list.
+This is of course quite restrictive, but there is nevertheless quite a
+bit that can be done within these confines, as can be seen in the litmus
+test at \path{tools/memory-model/litmus-tests/MP+onceassign+derefonce.litmus}:
+
+\begin{fcvlabel}[ln:docs:litmus:MPderef]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	C MP+onceassign+derefonce
+
+	{
+	y=z;     %lnlbl@inity$
+	z=0;     %lnlbl@initz$
+	}
+
+	P0(int *x, int **y)
+	{
+		WRITE_ONCE(*x, 1);           %lnlbl@P0:x$
+		rcu_assign_pointer(*y, x);   %lnlbl@P0:y$
+	}
+
+	P1(int *x, int **y)
+	{
+		int *r0;
+		int r1;
+
+		rcu_read_lock();             %lnlbl@P1:lock$
+		r0 = rcu_dereference(*y);    %lnlbl@P1:y$
+		r1 = READ_ONCE(*r0);         %lnlbl@P1:r1$
+		rcu_read_unlock();           %lnlbl@P1:unlock$
+	}
+
+	exists (1:r0=x /\ 1:r1=0)
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:docs:litmus:MPderef]
+\Clnref{inity}'s \qco{y=z} may seem odd, given that \qco{z}~has not yet
+been initialized.
+But \qco{y=z} does not set the value of~\qco{y} to that of~\qco{z}, but instead
+sets the value of~\qco{y} to the \emph{address} of~\qco{z}.
+\Clnref{inity,initz} therefore create a simple linked list, with \qco{y}
+pointing to~\qco{z} and~\qco{z} having a NULL pointer.
+A much longer linked list could be created if desired, and circular singly
+linked lists can also be created and manipulated.
+
+The \qco{exists} clause works the same way, with the \qco{1:r0=x} comparing
+\co{P1()}'s \qco{r0} not to the value of~\qco{x}, but again to its address.
+This term of the \qco{exists} clause therefore tests whether
+\clnref{P1:y}'s load from~\qco{y} saw the value stored by \clnref{P0:y},
+which is in fact what is required in this case.
+
+\co{P0()}'s \clnref{P0:x} initializes "x" to the value~1 then \clnref{P0:y}
+links to~\qco{x} from~\qco{y}, replacing~\qco{z}.
+
+\co{P1()}'s \clnref{P1:y} loads a pointer from~\qco{y}, and \clnref{P1:r1}
+dereferences that pointer.
+The RCU read-side critical section spanning \clnrefrange{P1:lock}{P1:unlock}
+is just for show in this example.
+Note that the address used for \clnref{P1:r1}'s load depends on
+(in this case, ``is exactly the same as'') the value loaded by \clnref{P1:y}.
+This is an example of what is called an ``address dependency''.
+This particular address dependency extends from the load on \clnref{P1:y} to the
+load on \clnref{P1:r1}.
+Address dependencies provide a weak form of ordering.
+\end{fcvref}
+
+Running this test results in the following:
+
+\begin{VerbatimN}[commandchars=\%\@\$]
+	Test MP+onceassign+derefonce Allowed
+	States 2
+	1:r0=x; 1:r1=1;
+	1:r0=z; 1:r1=0;
+	No
+	Witnesses
+	Positive: 0 Negative: 2
+	Condition exists (1:r0=x /\ 1:r1=0)
+	Observation MP+onceassign+derefonce Never 0 2
+	Time MP+onceassign+derefonce 0.00
+	Hash=49ef7a741563570102448a256a0c8568
+\end{VerbatimN}
+
+The only possible outcomes feature \co{P1()} loading a pointer to~\qco{z}
+(which contains zero) on the one hand and \co{P1()} loading a pointer to~\qco{x}
+(which contains the value one) on the other.
+This should be reassuring because it says that RCU readers cannot see the
+old preinitialization values when accessing a newly inserted list node.
+This undesirable scenario is flagged by the \qco{exists} clause, and
+would occur if \co{P1()} loaded a pointer to~\qco{x}, but obtained
+the pre-initialization value of zero after dereferencing that pointer.
+
+
+\subsection{Comments}
+
+Different portions of a litmus test are processed by different parsers,
+which has the charming effect of requiring different comment syntax in
+different portions of the litmus test.
+The C-syntax portions use C-language comments (either \qco{/* */} or \qco{//}),
+while the other portions use Ocaml comments \qco{(* *)}.
+
+The following litmus test illustrates the comment style corresponding
+to each syntactic unit of the test:
+
+\begin{VerbatimN}[commandchars=\%\@\$]
+	C MP+onceassign+derefonce (* A *)
+
+	(* B *)
+
+	{
+	y=z; (* C *)
+	z=0;
+	} // D
+
+	// E
+
+	P0(int *x, int **y) // F
+	{
+		WRITE_ONCE(*x, 1);  // G
+		rcu_assign_pointer(*y, x);
+	}
+
+	// H
+
+	P1(int *x, int **y)
+	{
+		int *r0;
+		int r1;
+
+		rcu_read_lock();
+		r0 = rcu_dereference(*y);
+		r1 = READ_ONCE(*r0);
+		rcu_read_unlock();
+	}
+
+	// I
+
+	exists (* J *) (1:r0=x /\ (* K *) 1:r1=0) (* L *)
+\end{VerbatimN}
+
+In short, use C-language comments in the C code and Ocaml comments in
+the rest of the litmus test.
+
+On the other hand, if you prefer C-style comments everywhere, the
+C preprocessor is your friend.
+
+
+\subsection{Asynchronous RCU Grace Periods}
+
+The following litmus test is derived from the example show in
+\path{Documentation/litmus-tests/rcu/RCU+sync+free.litmus}, but
+converted to emulate \co{call_rcu()}:
+
+\begin{fcvlabel}[ln:docs:litmus:RCU]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	C RCU+sync+free
+
+	{
+	int x = 1;      %lnlbl@initx$
+	int *y = &x;
+	int z = 1;      %lnlbl@initz$
+	}
+
+	P0(int *x, int *z, int **y)    %lnlbl@P0:b$
+	{
+		int *r0;
+		int r1;
+
+		rcu_read_lock();
+		r0 = rcu_dereference(*y);
+		r1 = READ_ONCE(*r0);
+		rcu_read_unlock();
+	}                              %lnlbl@P0:e$
+
+	P1(int *z, int **y, int *c)    %lnlbl@P1:b$
+	{
+		rcu_assign_pointer(*y, z);
+		smp_store_release(*c, 1); // Emulate call_rcu().
+	}                              %lnlbl@P1:e$
+
+	P2(int *x, int *z, int **y, int *c)   %lnlbl@P2:b$
+	{
+		int r0;
+
+		r0 = smp_load_acquire(*c); // Note call_rcu() request.  %lnlbl@P2:c$
+		synchronize_rcu(); // Wait one grace period.  %lnlbl@P2:sync$
+		WRITE_ONCE(*x, 0); // Emulate the RCU callback.  %lnlbl@P2:x$
+	}                                     %lnlbl@P2:e$
+
+	filter (2:r0=1) (* Reject too-early starts. *)  %lnlbl@filter$
+	exists (0:r0=x /\ 0:r1=0)
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:docs:litmus:RCU]
+\Clnrefrange{initx}{initz} initialize a linked list headed by~\qco{y}
+that initially contains~\qco{x}.
+In addition, \qco{z} is pre-initialized to prepare for \co{P1()}, which
+will replace \qco{x} with~\qco{z} in this list.
+
+\co{P0()} on \clnrefrange{P0:b}{P0:e} enters an RCU read-side critical
+section, loads the list header~\qco{y} and dereferences it, leaving the
+node in \qco{0:r0} and the node's value in \qco{0:r1}.
+
+\co{P1()} on \clnrefrange{P1:b}{P1:e} updates the list header to instead
+reference~\qco{z}, then emulates \co{call_rcu()} by doing a release store
+into~\qco{c}.
+
+\co{P2()} on \clnrefrange{P2:b}{P2:e} emulates the behind-the-scenes effect
+of doing a \co{call_rcu()}.
+\Clnref{P2:c} first does an acquire load from~\qco{c}, then \clnref{P2:sync}
+waits for an RCU grace period to elapse, and finally \clnref{P2:x} emulates
+the RCU callback, which in turn emulates a call to \co{kfree()}.
+
+Of course, it is possible for \co{P2()} to start too soon, so that the
+value of \qco{2:r0} is zero rather than the required value of~\qco{1}.
+The \qco{filter} clause on \clnref{filter} handles this possibility, rejecting
+all executions in which \qco{2:r0} is not equal to the value~\qco{1}.
+\end{fcvref}
+
+
+\subsection{Performance}
+
+LKMM's exploration of the full state-space can be extremely helpful,
+but it does not come for free.
+The price is exponential computational complexity in terms of the number
+of processes, the average number of statements in each process, and the
+total number of stores in the litmus test.
+
+So it is best to start small and then work up.
+Where possible, break your code down into small pieces each representing
+a core concurrency requirement.
+
+That said, \co{herd7} is quite fast.
+On an unprepossessing x86 laptop, it was able to analyze the following
+10-process RCU litmus test in about six seconds.
+
+\begin{itemize}
+\item \url{https://github.com/paulmckrcu/litmus/blob/master/auto/C-RW-R+RW-R+RW-G+RW-G+RW-G+RW-G+RW-R+RW-R+RW-R+RW-R.litmus}
+\end{itemize}
+
+One way to make \co{herd7} run faster is to use the \qco{-speedcheck true}
+option.
+This option prevents \co{herd7} from generating all possible end states,
+instead causing it to focus solely on whether or not the \qco{exists}
+clause can be satisfied.
+With this option, \co{herd7} evaluates the above litmus test in
+about 300 milliseconds, for more than an order of magnitude improvement
+in performance.
+
+Larger 16-process litmus tests that would normally consume 15 minutes
+of time complete in about 40 seconds with this option.
+To be fair, you do get an extra 65,535 states when you leave off the
+\qco{-speedcheck true} option.
+
+\begin{itemize}
+\item \url{https://github.com/paulmckrcu/litmus/blob/master/auto/C-RW-R+RW-R+RW-G+RW-G+RW-G+RW-G+RW-R+RW-R+RW-R+RW-R+RW-G+RW-G+RW-G+RW-G+RW-R+RW-R.litmus}
+\end{itemize}
+    
+Nevertheless, litmus-test analysis really is of exponential complexity,
+whether with or without \qco{-speedcheck true}.
+Increasing by just three processes to a 19-process litmus test requires
+2~hours and 40~minutes without, and about 8~minutes with \qco{-speedcheck true}.
+Each of these results represent roughly an order of magnitude slowdown
+compared to the 16-process litmus test.
+Again, to be fair, the multi-hour run explores no fewer than 524,287
+additional states compared to the shorter one.
+
+\begin{itemize}
+\item \url{https://github.com/paulmckrcu/litmus/blob/master/auto/C-RW-R+RW-R+RW-G+RW-G+RW-G+RW-G+RW-R+RW-R+RW-R+RW-R+RW-R+RW-R+RW-G+RW-G+RW-G+RW-G+RW-R+RW-R+RW-R.litmus}
+\end{itemize}
+
+If you don't like command-line arguments, you can obtain a similar speedup
+by adding a \qco{filter} clause with exactly the same expression as your
+"exists" clause.
+
+However, please note that seeing the full set of states can be extremely
+helpful when developing and debugging litmus tests.
+
+
+\section{Limitations}
+
+Limitations of the Linux-kernel memory model (LKMM) include:
+
+\begin{enumerate}
+  \item	Compiler optimizations are not accurately modeled.
+	Of course, the use of \co{READ_ONCE()} and \co{WRITE_ONCE()} limits
+	the compiler's ability to optimize, but under some circumstances it
+	is possible for the compiler to undermine the memory model.
+	For more information, see \path{Documentation/explanation.txt}
+	(in particular, the ``THE PROGRAM ORDER RELATION: po AND po-loc''
+	and ``A WARNING'' sections).
+
+	Note that this limitation in turn limits LKMM's ability to
+	accurately model address, control, and data dependencies.
+	For example, if the compiler can deduce the value of some variable
+	carrying a dependency, then the compiler can break that dependency
+	by substituting a constant of that value.
+
+	Conversely, LKMM will sometimes overestimate the amount of
+	reordering compilers and CPUs can carry out, leading it to miss
+	some pretty obvious cases of ordering.  A simple example is:
+
+\begin{VerbatimU}
+		r1 = READ_ONCE(x);
+		if (r1 == 0)
+			smp_mb();
+		WRITE_ONCE(y, 1);
+\end{VerbatimU}
+
+	The \co{WRITE_ONCE()} does not depend on the \co{READ_ONCE()}, and as a
+	result, LKMM does not claim ordering.
+	However, even though no dependency is present, the \co{WRITE_ONCE()}
+	will not be executed before the \co{READ_ONCE()}.
+	There are two reasons for this:
+
+	\begin{quote}
+                The presence of the \co{smp_mb()} in one of the branches
+                prevents the compiler from moving the \co{WRITE_ONCE()}
+                up before the \qco{if} statement, since the compiler has
+                to assume that \co{r1} will sometimes be \co{0} (but see the
+                comment below);
+
+                CPUs do not execute stores before po-earlier conditional
+                branches, even in cases where the store occurs after the
+                two arms of the branch have recombined.
+	\end{quote}
+
+	It is clear that it is not dangerous in the slightest for LKMM to
+	make weaker guarantees than architectures.
+	In fact, it is desirable, as it gives compilers room for making
+	optimizations.
+	For instance, suppose that a 0~value in \co{r1} would trigger undefined
+	behavior elsewhere.
+	Then a clever compiler might deduce that \co{r1} can never be~0 in
+	the \co{if} condition.
+	As a result, said clever compiler might deem it safe to optimize
+	away the \co{smp_mb()}, eliminating the branch and any ordering
+	an architecture would guarantee otherwise.
+
+  \item	Multiple access sizes for a single variable are not supported,
+	and neither are misaligned or partially overlapping accesses.
+
+  \item	Exceptions and interrupts are not modeled.
+	In some cases, this limitation can be overcome by modeling the
+	interrupt or exception with an additional process.
+
+  \item	I/O such as MMIO or DMA is not supported.
+
+  \item	Self-modifying code (such as that found in the kernel's
+	alternatives mechanism, function tracer, Berkeley Packet Filter
+	JIT compiler, and module loader) is not supported.
+
+  \item	Complete modeling of all variants of atomic read-modify-write
+	operations, locking primitives, and RCU is not provided.
+	For example, \co{call_rcu()} and \co{rcu_barrier()} are not supported.
+	However, a substantial amount of support is provided for these
+	operations, as shown in the linux-kernel.def file.
+
+	Here are specific limitations:
+
+	\begin{enumerate}
+	\item	When \co{rcu_assign_pointer()} is passed \co{NULL}, the Linux
+		kernel provides no ordering, but LKMM models this
+		case as a store release.
+
+	\item	The \qco{unless} RMW operations are not currently modeled:
+		\co{atomic_long_add_unless()}, \co{atomic_inc_unless_negative()},
+		and \co{atomic_dec_unless_positive()}.
+		These can be emulated in litmus tests, for example, by
+		using \co{atomic_cmpxchg()}.
+
+		One exception of this limitation is \co{atomic_add_unless()},
+		which is provided directly by \co{herd7} (so no corresponding
+		definition in \path{linux-kernel.def}).
+		\co{atomic_add_unless()} is modeled by \co{herd7} therefore
+		it can be used in litmus tests.
+
+	\item	The \co{call_rcu()} function is not modeled.
+		As was shown above, it can be emulated in litmus tests by
+		adding another process that invokes \co{synchronize_rcu()}
+		and the body of the callback function, with (for example)
+		a release-acquire from the site of the emulated \co{call_rcu()}
+		to the beginning of the additional process.
+
+	\item	The \co{rcu_barrier()} function is not modeled.
+		It can be emulated in litmus tests emulating \co{call_rcu()} via
+		(for example) a release-acquire from the end of each
+		additional \co{call_rcu()} process to the site of the
+		emulated \co{rcu_barrier()}.
+
+	\item	Reader-writer locking is not modeled.
+		It can be emulated in litmus tests using atomic
+		read-modify-write operations.
+	\end{enumerate}
+\end{enumerate}
+
+The fragment of the C language supported by these litmus tests is quite
+limited and in some ways non-standard:
+
+\begin{enumerate}
+\item	There is no automatic C-preprocessor pass.
+	ou can of course run it manually, if you choose.
+
+\item	There is no way to create functions other than the \co{Pn()} functions
+	that model the concurrent processes.
+
+\item	The \co{Pn()} functions' formal parameters must be pointers to the
+	global shared variables.
+	Nothing can be passed by value into these functions.
+
+\item	The only functions that can be invoked are those built directly
+	into \co{herd7} or that are defined in the \path{linux-kernel.def} file.
+
+\item	The \qco{switch}, \qco{do}, \qco{for}, \qco{while}, and \qco{goto}
+	C statements are not supported.
+	The \qco{switch} statement can be emulated by the \qco{if} statement.
+	The \qco{do}, \qco{for}, and \qco{while} statements can
+	often be emulated by manually unrolling the loop, or perhaps by
+	enlisting the aid of the C preprocessor to minimize the resulting
+	code duplication.
+	Some uses of \qco{goto} can be emulated by \qco{if},
+	and some others by unrolling.
+
+\item	Although you can use a wide variety of types in litmus-test
+	variable declarations, and especially in global-variable
+	declarations, the \co{herd7} tool understands only int and
+	pointer types.
+	There is no support for floating-point types, enumerations,
+	characters, strings, arrays, or structures.
+
+\item	Parsing of variable declarations is very loose, with almost no
+	type checking.
+
+\item	Initializers differ from their C-language counterparts.
+	For example, when an initializer contains the name of a shared
+	variable, that name denotes a pointer to that variable, not
+	the current value of that variable.
+	For example, \qco{int x = y} is interpreted the way \qco{int x = &y}
+	would be in C.
+
+\item	Dynamic memory allocation is not supported, although this can
+	be worked around in some cases by supplying multiple statically
+	allocated variables.
+\end{enumerate}
+
+Some of these limitations may be overcome in the future, but others are
+more likely to be addressed by incorporating the Linux-kernel memory model
+into other tools.
+
+Finally, please note that LKMM is subject to change as hardware, use cases,
+and compilers evolve.
