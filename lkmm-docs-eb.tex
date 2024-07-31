@@ -85,7 +85,16 @@
 \usepackage[all]{nowidow}
 \titleformat{\paragraph}[runin]{\normalfont\normalsize\bfseries}{}{0pt}{}
 
+% custom packages
+\newboolean{qqzbg}
+\setboolean{qqzbg}{true} % overriden by target specific setting
+\newcommand{\IfQqzBg}[2]{\ifthenelse{\boolean{qqzbg}}{#1}{#2}}
+\newboolean{noqqz}
+\setboolean{noqqz}{false}
+\newcommand{\IfNoQqz}[2]{\ifthenelse{\boolean{noqqz}}{#1}{#2}}
+
 %\input{autodate} % need to input here to reflect tag state
+\usepackage{qqz}
 
 % custom booleans
 
@@ -491,7 +500,13 @@
 \input{lkmm-docs-recipes}
 \input{lkmm-docs-control-dependencies}
 \input{lkmm-docs-access-marking}
+\input{lkmm-docs-cheatsheet}
 \input{lkmm-docs-explanation}
+\input{lkmm-docs-herd-representation}
 \input{lkmm-docs-glossary}
+
+\input{rcu/index}
+
+\QuickQuizAnswers
 
 \end{document}

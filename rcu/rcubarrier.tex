@@ -1,0 +1,423 @@
+\section{RCU and Unloadable Modules}
+\label{sec:rcu:RCU and Unloadable Modules}
+
+[Originally published in LWN Jan. 14, 2007: \url{http://lwn.net/Articles/217484/}]
+
+RCU updaters sometimes use \co{call_rcu()} to initiate an asynchronous wait for
+a grace period to elapse.
+This primitive takes a pointer to an \co{rcu_head}
+struct placed within the RCU-protected data structure and another pointer
+to a function that may be invoked later to free that structure.
+Code to
+delete an element~\co{p} from the linked list from IRQ context might then be
+as follows:
+
+\begin{VerbatimU}
+	list_del_rcu(p);
+	call_rcu(&p->rcu, p_callback);
+\end{VerbatimU}
+
+Since \co{call_rcu()} never blocks, this code can safely be used from within
+IRQ context.
+The function \co{p_callback()} might be defined as follows:
+
+\begin{VerbatimU}
+	static void p_callback(struct rcu_head *rp)
+	{
+		struct pstruct *p = container_of(rp, struct pstruct, rcu);
+
+		kfree(p);
+	}
+\end{VerbatimU}
+
+
+\subsection{Unloading Modules That Use \co{call_rcu()}}
+\label{sec:rcu:Unloading Modules That Use call_rcu()}
+
+But what if the \co{p_callback()} function is defined in an unloadable module?
+
+If we unload the module while some RCU callbacks are pending,
+the CPUs executing these callbacks are going to be severely
+disappointed when they are later invoked, as fancifully depicted at
+\url{http://lwn.net/images/ns/kernel/rcu-drop.jpg}.
+
+We could try placing a \co{synchronize_rcu()} in the module-exit code path,
+but this is not sufficient.
+Although \co{synchronize_rcu()} does wait for a
+grace period to elapse, it does not wait for the callbacks to complete.
+
+One might be tempted to try several back-to-back \co{synchronize_rcu()}
+calls, but this is still not guaranteed to work.
+If there is a very
+heavy RCU-callback load, then some of the callbacks might be deferred in
+order to allow other processing to proceed.
+For but one example, such
+deferral is required in realtime kernels in order to avoid excessive
+scheduling latencies.
+
+
+\subsection{\co{rcu_barrier()}}
+\label{sec:rcu:rcu_barrier()}
+
+This situation can be handled by the \co{rcu_barrier()} primitive.
+Rather
+than waiting for a grace period to elapse, \co{rcu_barrier()} waits for all
+outstanding RCU callbacks to complete.
+Please note that \co{rcu_barrier()}
+does \emph{not} imply \co{synchronize_rcu()}, in particular, if there are no RCU
+callbacks queued anywhere, \co{rcu_barrier()} is within its rights to return
+immediately, without waiting for anything, let alone a grace period.
+
+Pseudo-code using \co{rcu_barrier()} is as follows:
+
+\begin{enumerate}
+\item Prevent any new RCU callbacks from being posted.
+\item Execute \co{rcu_barrier()}.
+\item Allow the module to be unloaded.
+\end{enumerate}
+
+There is also an \co{srcu_barrier()} function for SRCU, and you of course
+must match the flavor of \co{srcu_barrier()} with that of \co{call_srcu()}.
+If your module uses multiple \co{srcu_struct} structures, then it must also
+use multiple invocations of \co{srcu_barrier()} when unloading that module.
+For example, if it uses \co{call_rcu()}, \co{call_srcu()} on \co{srcu_struct_1}, and
+\co{call_srcu()} on \co{srcu_struct_2}, then the following three lines of code
+will be required when unloading:
+
+\begin{VerbatimN}
+  rcu_barrier();
+  srcu_barrier(&srcu_struct_1);
+  srcu_barrier(&srcu_struct_2);
+\end{VerbatimN}
+
+If latency is of the essence, workqueues could be used to run these
+three functions concurrently.
+
+An ancient version of the rcutorture module makes use of \co{rcu_barrier()}
+in its exit function as follows:
+
+\begin{fcvlabel}[ln:rcubarrier]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	static void
+	rcu_torture_cleanup(void)
+	{
+		int i;
+
+		fullstop = 1;        %lnlbl@setglb$
+		if (shuffler_task != NULL) {    %lnlbl@ifshuffl$
+			VERBOSE_PRINTK_STRING("Stopping rcu_torture_shuffle task");
+			kthread_stop(shuffler_task);
+		}
+		shuffler_task = NULL;
+
+		if (writer_task != NULL) {
+			VERBOSE_PRINTK_STRING("Stopping rcu_torture_writer task");
+			kthread_stop(writer_task);
+		}
+		writer_task = NULL;
+
+		if (reader_tasks != NULL) {
+			for (i = 0; i < nrealreaders; i++) {
+				if (reader_tasks[i] != NULL) {
+					VERBOSE_PRINTK_STRING(
+					                     "Stopping rcu_torture_reader task");
+					kthread_stop(reader_tasks[i]);
+				}
+				reader_tasks[i] = NULL;
+			}
+			kfree(reader_tasks);
+			reader_tasks = NULL;
+		}
+		rcu_torture_current = NULL;
+
+		if (fakewriter_tasks != NULL) {
+			for (i = 0; i < nfakewriters; i++) {
+				if (fakewriter_tasks[i] != NULL) {
+					VERBOSE_PRINTK_STRING(
+					                      "Stopping rcu_torture_fakewriter task");
+					kthread_stop(fakewriter_tasks[i]);
+				}
+				fakewriter_tasks[i] = NULL;
+			}
+			kfree(fakewriter_tasks);
+			fakewriter_tasks = NULL;
+		}
+
+		if (stats_task != NULL) {
+			VERBOSE_PRINTK_STRING("Stopping rcu_torture_stats task");
+			kthread_stop(stats_task);
+		}
+		stats_task = NULL;   %lnlbl@statstasknull$
+
+		/* Wait for all RCU callbacks to fire. */
+		rcu_barrier();   %lnlbl@rcubarrier$
+
+		rcu_torture_stats_print(); /* -After- the stats thread is stopped! */ %lnlbl@print:b$
+
+		if (cur_ops->cleanup != NULL)
+			cur_ops->cleanup();
+		if (atomic_read(&n_rcu_torture_error))
+			rcu_torture_print_module_parms("End of test: FAILURE");
+		else
+			rcu_torture_print_module_parms("End of test: SUCCESS");  %lnlbl@print:e$
+	}
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:rcubarrier]
+\Clnref{setglb} sets a global variable that prevents any RCU callbacks from
+re-posting themselves.
+This will not be necessary in most cases, since
+RCU callbacks rarely include calls to \co{call_rcu()}.
+However, the rcutorture
+module is an exception to this rule, and therefore needs to set this
+global variable.
+
+\Clnrefrange{ifshuffl}{statstasknull} %7,50
+stop all the kernel tasks associated with the rcutorture
+module.
+Therefore, once execution reaches \clnref{rcubarrier}, % line 53
+no more rcutorture
+RCU callbacks will be posted. The \co{rcu_barrier()} call on \clnref{rcubarrier} % line 53
+waits
+for any pre-existing callbacks to complete.
+
+Then \clnrefrange{print:b}{print:e} % lines 55-62
+print status and do operation-specific cleanup, and
+then return, permitting the module-unload operation to be completed.
+\end{fcvref}
+
+\QuickQuiz{
+	Is there any other situation where \co{rcu_barrier()} might
+	be required?
+}\QuickQuizAnswer{
+	Interestingly enough, \co{rcu_barrier()} was not originally
+	implemented for module unloading.
+	Nikita Danilov was using
+	RCU in a filesystem, which resulted in a similar situation at
+	filesystem-unmount time.
+	Dipankar Sarma coded up \co{rcu_barrier()}
+	in response, so that Nikita could invoke it during the
+	filesystem-unmount process.
+
+	Much later, yours truly hit the RCU module-unload problem when
+	implementing rcutorture, and found that \co{rcu_barrier()} solves
+	this problem as well.
+}\QuickQuizEnd
+
+Your module might have additional complications.
+For example, if your
+module invokes \co{call_rcu()} from timers, you will need to first refrain
+from posting new timers, cancel (or wait for) all the already-posted
+timers, and only then invoke \co{rcu_barrier()} to wait for any remaining
+RCU callbacks to complete.
+
+Of course, if your module uses \co{call_rcu()}, you will need to invoke
+\co{rcu_barrier()} before unloading.
+Similarly, if your module uses
+\co{call_srcu()}, you will need to invoke \co{srcu_barrier()} before unloading,
+and on the same \co{srcu_struct} structure.
+If your module uses \co{call_rcu()}
+\emph{and} \co{call_srcu()}, then (as noted above) you will need to invoke
+\co{rcu_barrier()} \emph{and} \co{srcu_barrier()}.
+
+
+\subsection{Implementing \co{rcu_barrier()}}
+\label{sec:rcu:Implementing rcu_barrier()}
+
+Dipankar Sarma's implementation of \co{rcu_barrier()} makes use of the fact
+that RCU callbacks are never reordered once queued on one of the per-CPU
+queues.
+His implementation queues an RCU callback on each of the per-CPU
+callback queues, and then waits until they have all started executing, at
+which point, all earlier RCU callbacks are guaranteed to have completed.
+
+The original code for \co{rcu_barrier()} was roughly as follows:
+
+\begin{fcvlabel}[ln:original:rcubarrier]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	void rcu_barrier(void)
+	{
+		BUG_ON(in_interrupt());  %lnlbl@bugon$
+		/* Take cpucontrol mutex to protect against CPU hotplug */
+		mutex_lock(&rcu_barrier_mutex);  %lnlbl@lock$
+		init_completion(&rcu_barrier_completion);   %lnlbl@init$
+		atomic_set(&rcu_barrier_cpu_count, 1);      %lnlbl@set$
+		on_each_cpu(rcu_barrier_func, NULL, 0, 1);  %lnlbl@eachcpu$
+		if (atomic_dec_and_test(&rcu_barrier_cpu_count))  %lnlbl@dec$
+			complete(&rcu_barrier_completion);        %lnlbl@complete$
+		wait_for_completion(&rcu_barrier_completion);   %lnlbl@wait$
+		mutex_unlock(&rcu_barrier_mutex);   %lnlbl@unlock$
+	}
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:original:rcubarrier]
+\Clnref{bugon} % Line 3
+verifies that the caller is in process context, and
+\clnref{lock,unlock} % lines 5 and 12
+use \co{rcu_barrier_mutex} to ensure that only one \co{rcu_barrier()} is using the
+global completion and counters at a time, which are initialized on
+\clnref{init,set} % lines 6 and 7.
+\Clnref{eachcpu} % Line 8
+causes each CPU to invoke \co{rcu_barrier_func()}, which is
+shown below.
+Note that the final \qco{1} in \co{on_each_cpu()}'s argument list
+ensures that all the calls to \co{rcu_barrier_func()} will have completed
+before \co{on_each_cpu()} returns.
+\Clnref{dec} % Line 9
+removes the initial count from
+\co{rcu_barrier_cpu_count}, and if this count is now zero,
+\clnref{complete} % line 10
+finalizes
+the completion, which prevents
+\clnref{wait} % line 11
+from blocking.
+Either way,
+\clnref{wait} % line 11
+then waits (if needed) for the completion.
+\end{fcvref}
+
+\QuickQuiz{
+	\begin{fcvref}[ln:original:rcubarrier]
+	Why doesn't \clnref{eachcpu} % line 8
+	initialize \co{rcu_barrier_cpu_count} to zero,
+	thereby avoiding the need for \clnref{dec,complete}? % lines 9 and 10
+        \end{fcvref}
+}\QuickQuizAnswer{
+	\begin{fcvref}[ln:original:rcubarrier]
+	Suppose that the \co{on_each_cpu()} function shown on \clnref{eachcpu} % line 8
+	was
+	delayed, so that CPU~0's \co{rcu_barrier_func()} executed and
+	the corresponding grace period elapsed, all before CPU~1's
+	\co{rcu_barrier_func()} started executing.
+	This would result in
+	\co{rcu_barrier_cpu_count} being decremented to zero, so that \clnref{}'s % line 11
+	\co{wait_for_completion()} would return immediately, failing to
+	wait for CPU~1's callbacks to be invoked.
+
+	Note that this was not a problem when the \co{rcu_barrier()} code
+	was first added back in 2005.
+	This is because \co{on_each_cpu()}
+	disables preemption, which acted as an RCU read-side critical
+	section, thus preventing CPU~0's grace period from completing
+	until \co{on_each_cpu()} had dealt with all of the CPUs.
+	However,
+	with the advent of preemptible RCU, \co{rcu_barrier()} no longer
+	waited on nonpreemptible regions of code in preemptible kernels,
+	that being the job of the new \co{rcu_barrier_sched()} function.
+
+	However, with the RCU flavor consolidation around v4.20, this
+	possibility was once again ruled out, because the consolidated
+	RCU once again waits on nonpreemptible regions of code.
+
+	Nevertheless, that extra count might still be a good idea.
+	Relying on these sort of accidents of implementation can result
+	in later surprise bugs when the implementation changes.
+        \end{fcvref}
+}\QuickQuizEnd
+
+
+This code was rewritten in 2008 and several times thereafter, but this
+still gives the general idea.
+
+The \co{rcu_barrier_func()} runs on each CPU, where it invokes \co{call_rcu()}
+to post an RCU callback, as follows:
+
+\begin{fcvlabel}[ln:modern-rcu-barrier]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	static void rcu_barrier_func(void *notused)
+	{
+		int cpu = smp_processor_id();   %lnlbl@cpu$
+		struct rcu_data *rdp = &per_cpu(rcu_data, cpu);  %lnlbl@rdp$
+		struct rcu_head *head;
+
+		head = &rdp->barrier;                 %lnlbl@head$
+		atomic_inc(&rcu_barrier_cpu_count);    %lnlbl@inc$
+		call_rcu(head, rcu_barrier_callback);  %lnlbl@call$
+	}
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:modern-rcu-barrier]
+\Clnref{cpu,rdp} % Lines 3 and 4
+locate RCU's internal per-CPU \co{rcu_data} structure,
+which contains the struct \co{rcu_head} that needed for the later call to
+\co{call_rcu()}.
+\Clnref{head} % Line 7
+picks up a pointer to this struct \co{rcu_head}, and
+\clnref{inc} % line 8
+increments the global counter.
+This counter will later be decremented
+by the callback.
+\Clnref{call} % Line 9
+then registers the \co{rcu_barrier_callback()} on
+the current CPU's queue.
+\end{fcvref}
+
+The \co{rcu_barrier_callback()} function simply atomically decrements the
+\co{rcu_barrier_cpu_count} variable and finalizes the completion when it
+reaches zero, as follows:
+
+\begin{VerbatimN}
+  1  static void rcu_barrier_callback(struct rcu_head *notused)
+  2  {
+  3    if (atomic_dec_and_test(&rcu_barrier_cpu_count))
+  4      complete(&rcu_barrier_completion);
+  5  }
+\end{VerbatimN}
+
+\QuickQuiz{
+	What happens if CPU~0's \co{rcu_barrier_func()} executes
+	immediately (thus incrementing \co{rcu_barrier_cpu_count} to the
+	value one), but the other CPU's \co{rcu_barrier_func()} invocations
+	are delayed for a full grace period?
+	Couldn't this result in
+	\co{rcu_barrier()} returning prematurely?
+}\QuickQuizAnswer{
+	This cannot happen.
+	The reason is that \co{on_each_cpu()} has its last
+	argument, the wait flag, set to \qco{1}.
+	This flag is passed through
+	to \co{smp_call_function()} and further to \co{smp_call_function_on_cpu()},
+	causing this latter to spin until the cross-CPU invocation of
+	\co{rcu_barrier_func()} has completed.
+	This by itself would prevent
+	a grace period from completing on non-\co{CONFIG_PREEMPTION} kernels,
+	since each CPU must undergo a context switch (or other quiescent
+	state) before the grace period can complete.
+        However, this is
+	of no use in \co{CONFIG_PREEMPTION} kernels.
+
+	Therefore, \co{on_each_cpu()} disables preemption across its call
+	to \co{smp_call_function()} and also across the local call to
+	\co{rcu_barrier_func()}.
+	Because recent RCU implementations treat
+	preemption-disabled regions of code as RCU read-side critical
+	sections, this prevents grace periods from completing.
+	This
+	means that all CPUs have executed \co{rcu_barrier_func()} before
+	the first \co{rcu_barrier_callback()} can possibly execute, in turn
+	preventing \co{rcu_barrier_cpu_count} from prematurely reaching zero.
+
+	But if \co{on_each_cpu()} ever decides to forgo disabling preemption,
+	as might well happen due to real-time latency considerations,
+	initializing \co{rcu_barrier_cpu_count} to one will save the day.
+}\QuickQuizEnd
+
+The current \co{rcu_barrier()} implementation is more complex, due to the need
+to avoid disturbing idle CPUs (especially on battery-powered systems)
+and the need to minimally disturb non-idle CPUs in real-time systems.
+In addition, a great many optimizations have been applied.
+However,
+the code above illustrates the concepts.
+
+
+\subsection{\co{rcu_barrier()} Summary}
+\label{sec:rcu:rcu_barrier() Summary}
+
+The \co{rcu_barrier()} primitive is used relatively infrequently, since most
+code using RCU is in the core kernel rather than in modules.
+However, if
+you are using RCU from an unloadable module, you need to use \co{rcu_barrier()}
+so that your module may be safely unloaded.

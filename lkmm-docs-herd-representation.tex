@@ -1,0 +1,158 @@
+\chapter{Herd representation}
+\label{chp:lkmm:Herd representation}
+
+\begin{Note}
+  Disclaimer.
+  The tables include representations of \qco{add} and \qco{and} operations;
+  corresponding/identical representations of \qco{sub}, \qco{inc}, \qco{dec}
+  \qco{or}, \qco{xor}, and \qco{andnot} operations are omitted.
+\end{Note}
+
+\begin{VerbatimU}
+#
+# Legend:
+#	R,	a Load event
+#	W,	a Store event
+#	F,	a Fence event
+#	LKR,	a Lock-Read event
+#	LKW,	a Lock-Write event
+#	UL,	an Unlock event
+#	LF,	a Lock-Fail event
+#	RL,	a Read-Locked event
+#	RU,	a Read-Unlocked event
+#	R*,	a Load event included in RMW
+#	W*,	a Store event included in RMW
+#	SRCU,	a Sleepable-Read-Copy-Update event
+#
+#	po,	a Program-Order link
+#	rmw,	a Read-Modify-Write link - every rmw link is a po link
+#
+# By convention, a blank line in a cell means "same as the preceding line".
+\end{VerbatimU}
+
+\section{Non-RMW ops}
+
+{\small
+\centering
+\renewcommand*{\arraystretch}{1.1}
+%\rowcolors{7}{lightgray}{}
+%\ebresizewidth{
+\begin{tabular}{rl}\toprule
+	C macro  &  Events \\
+	\cmidrule(r){1-1} \cmidrule(l){2-2}
+	\tco{READ_ONCE}           & R[once] \\
+        \tco{atomic_read}         & \\
+        \tco{WRITE_ONCE}          & W[once] \\
+	\tco{atomic_set}          & \\
+	\tco{smp_load_acquire}    & R[acquire] \\
+	\tco{atomic_read_acquire} & \\
+	\tco{smp_store_release}   & W[release] \\
+	\tco{atomic_set_release}  & \\
+	\tco{smp_store_mb}        & W[once] ->po F[mb] \\
+	\tco{smp_mb}              & F[mb] \\
+	\tco{smp_rmb}             & F[rmb] \\
+	\tco{smp_wmb}             & F[wmb] \\
+	\tco{smp_mb__before_atomic} & F[before-atomic] \\
+	\tco{smp_mb__after_atomic} & F[after-atomic] \\
+	\tco{spin_unlock}         & UL \\
+	\tco{spin_is_locked}      & On seccess: RL \\
+	                          & On Failure: RU \\
+	\tco{smp_mb__after_spinlock} & F[after-spinlock] \\
+	\tco{smp_mb__after_unlock_lock} & F[after-unlock-lock] \\
+	\tco{rcu_read_lock}       & F[rcu-lock] \\
+	\tco{rcu_read_unlock}     & F[rcu-unlock] \\
+	\tco{synchronize_rcu}     & F[sync-rcu] \\
+        \tco{rcu_dereference}     & R[once] \\
+	\tco{rcu_assign_pointer}  & W[release] \\
+        \tco{srcu_read_lock}      & R[srcu-lock] \\
+        \tco{srcu_down_read}      & \\
+	\tco{srcu_read_unlock}    & W[srcu-unlock] \\
+	\tco{srcu_up_read}        & \\
+	\tco{synchronize_srcu}    & SRCU[sync-srcu] \\
+	\tco{smp_mb__after_srcu_read_unlock} & F[after-srcu-read-unlock] \\
+	\bottomrule
+\end{tabular}
+%}
+}
+
+\section{RMW ops w/o return value}
+
+{\small
+\centering
+\renewcommand*{\arraystretch}{1.1}
+%\rowcolors{7}{lightgray}{}
+%\ebresizewidth{
+\begin{tabular}{rl}\toprule
+	C macro  &  Events \\
+	\cmidrule(r){1-1} \cmidrule(l){2-2}
+	\tco{atomic_add} & R*[noreturn] ->rmw W*[once] \\
+	\tco{atomic_and} & \\
+	\tco{spin_lock}  & LKR ->po LKW \\
+	\bottomrule
+\end{tabular}
+%}
+}
+
+\section{RMW ops w/ return value}
+
+{\small
+\centering
+\renewcommand*{\arraystretch}{1.1}
+%\rowcolors{7}{lightgray}{}
+\ebresizewidth{
+\begin{tabular}{rl}\toprule
+	C macro  &  Events \\
+	\cmidrule(r){1-1} \cmidrule(l){2-2}
+	\tco{atomic_add_return} & F[mb] ->po R*[once] ->rmw W*[once] ->po F[mb] \\
+	\tco{atomic_fetch_add} & \\
+	\tco{atomic_fetch_and} & \\
+	\tco{atomic_xchg} & \\
+	\tco{xchg}        & \\
+        \tco{atomic_add_negative} & \\
+	\tco{atomic_add_return_relaxed} & R*[once] ->rmw W*[once] \\
+	\tco{atomic_fetch_add_relaxed} & \\
+	\tco{atomic_fetch_and_relaxed} & \\
+	\tco{atomic_xchg_relaxed} & \\
+	\tco{xchg_relaxed} & \\
+	\tco{atomic_add_negative_relaxed} & \\
+	\tco{atomic_add_return_acquire} & R*[acquire] ->rmw W*[once] \\
+	\tco{atomic_fetch_add_acquire} & \\
+	\tco{atomic_fetch_and_acquire} & \\
+	\tco{atomic_xchg_acquire} & \\
+	\tco{xchg_acquire} & \\
+	\tco{atomic_add_negative_acquire} & \\
+	\tco{atomic_add_return_release} & R*[once] ->rmw W*[release] \\
+	\tco{atomic_fetch_add_release} & \\
+	\tco{atomic_fetch_and_release} & \\
+	\tco{atomic_xchg_release} & \\
+	\tco{xchg_release} & \\
+	\tco{atomic_add_negative_release} & \\
+	\bottomrule
+\end{tabular}
+}}
+
+\section{Conditional RMW ops}
+
+{\small
+\centering
+\renewcommand*{\arraystretch}{1.1}
+%\rowcolors{7}{lightgray}{}
+\ebresizewidth{
+\begin{tabular}{rl}\toprule
+	C macro  &  Events \\
+	\cmidrule(r){1-1} \cmidrule(l){2-2}
+	\tco{atomic_cmpxchg} & On success: F[mb] ->po R*[once] ->rmw W*[once] ->po F[mb] \\
+	                     & On failure: R*[once] \\
+	\tco{cmpxchg} & \\
+        \tco{atomic_add_unless} & \\
+	\tco{atomic_cmpxchg_relaxed} & On success: R*[once] ->rmw W*[once] \\
+	                             & On failure: R*[once] \\
+	\tco{atomic_cmpxchg_acquire} & On success: R*[acquire] ->rmw W*[once] \\
+                                     & On failure: R*[once] \\
+	\tco{atomic_cmpxchg_release} & On success: R*[once] ->rmw W*[release] \\
+	                             & On failure: R*[once] \\
+	\tco{spin_trylock}           & On success: LKR ->po LKW \\
+	                             & On failure: LF \\
+	\bottomrule
+\end{tabular}
+}}
