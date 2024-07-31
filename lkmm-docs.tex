@@ -420,6 +420,11 @@
     },
   drop fuzzy shadow,#1}
 
+% Silence warning from hyperref due to the use of \co{} in section titles
+\RequirePackage[save]{silence}
+\WarningFilter[hyperreftoken]{hyperref}{Token not allowed in a PDF string (Unicode)}
+\ActivateWarningFilters[hyperreftoken]
+
 \begin{document}
 
 %%HTMLSKIP
