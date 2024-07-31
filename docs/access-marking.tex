@@ -1,4 +1,4 @@
-\chapter{Marking Shared-Memory Accesses}
+\section{Marking shared-memory accesses}
 
 This document provides guidelines for marking intentionally concurrent
 normal accesses to shared memory, that is ``normal'' as in accesses that do
@@ -13,7 +13,7 @@ This discussion builds on an earlier LWN article\footnote{
 \url{https://www.linuxfoundation.org/webinars/the-kernel-concurrency-sanitizer}
 }
 
-\section{Access-marking options}
+\subsection{Access-marking options}
 
 The Linux kernel provides the following access-marking options:
 
@@ -89,7 +89,7 @@ Here are some situations where \co{data_race()} should be used instead of
 \item	Writes setting values that feed into error-tolerant heuristics.
 \end{enumerate}
 
-\subsubsection{Data-Racy Reads for Approximate Diagnostics}
+\paragraph{Data-Racy reads for approximate diagnostics}
 
 Approximate diagnostics include lockdep reports, monitoring/statistics
 (including \path{/proc} and \path{/sys} output), \co{WARN*()/BUG*()}
@@ -118,7 +118,7 @@ to generate false positives because KCSAN will have no way of knowing
 that the resulting data race was intentional.
 
 
-\subsubsection{Data-Racy Reads That Are Checked Against Marked Reload}
+\paragraph{Data-racy reads that are checked against marked reload}
 
 The values from some reads are not implicitly trusted.
 They are instead fed into some operation that checks the full value
@@ -144,7 +144,7 @@ to generate false positives because KCSAN will have no way of knowing
 that the resulting data race was intentional.
 
 
-\subsubsection{Reads Feeding Into Error-Tolerant Heuristics}
+\paragraph{Reads feeding into error-tolerant heuristics}
 
 Values from some reads feed into heuristics that can tolerate occasional
 errors.
@@ -167,7 +167,7 @@ to generate false positives because KCSAN will have no way of knowing
 that the resulting data race was intentional.
 
 
-\subsubsection{Writes Setting Values Feeding Into Error-Tolerant Heuristics}
+\paragraph{Writes setting values feeding into error-tolerant heuristics}
 
 The values read into error-tolerant heuristics come from somewhere,
 for example, from \co{sysfs}.
@@ -254,7 +254,7 @@ For example:
 	int *__data_racy p; // Data-racy pointer to non-data-racy data.
 \end{VerbatimU}
 
-\section{Access-Documentation Options}
+\subsection{Access-documentation options}
 
 It is important to comment marked accesses so that people reading your
 code, yourself included, are reminded of the synchronization design.
@@ -280,7 +280,7 @@ and \co{data_race()} writes on the other, KCSAN will not report the location
 of these \co{data_race()} writes.
 
 
-\section{Examples}
+\subsection{Examples}
 
 As noted earlier, the goal is to prevent the compiler from destroying
 your concurrent algorithm, to help the human reader, and to inform

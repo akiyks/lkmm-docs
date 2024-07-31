@@ -1,10 +1,10 @@
-\chapter{Overview of Memory-Ordering Operations}
+\section{Overview of memory-ordering operations}
 
-This document gives an overview of the categories of memory-ordering
+This section gives an overview of the categories of memory-ordering
 operations provided by the Linux-kernel memory model (LKMM).
 
 
-\section{Categories of Ordering}
+\subsection{Categories of ordering}
 
 This section lists LKMM's three top-level categories of memory-ordering
 operations in decreasing order of strength:
@@ -30,7 +30,7 @@ Each of the above categories is described in more detail by one of the
 following sections.
 
 
-\section{Barriers}
+\subsection{Barriers}
 
 Each of the following categories of barriers is described in its own
 subsection below:
@@ -58,7 +58,7 @@ See the ``Linux Kernel Device Drivers'' book or the
 \url{https://lwn.net/Articles/698014/} article for more information.
 
 
-\subsection{Full Memory Barriers}
+\subsection{Full memory barriers}
 
 The Linux-kernel primitives that provide full ordering include:
 
@@ -140,7 +140,7 @@ full-memory-barrier semantics.
 Just please carefully comment this, otherwise your future self will hate you.
 
 
-\subsection{RMW Ordering Augmentation Barriers}
+\subsection{RMW ordering augmentation barriers}
 
 As noted in the previous section, non-value-returning RMW operations
 such as \co{atomic_inc()} and \co{atomic_dec()} guarantee no ordering whatsoever.
@@ -194,7 +194,7 @@ The reason is that the ordering of this intervening code will differ from
 one CPU architecture to another.
 
 
-\subsection{Write Memory Barrier}
+\subsection{Write memory barrier}
 
 The Linux kernel's write memory barrier is \co{smp_wmb()}.
 If a CPU executes the following code:
@@ -229,7 +229,7 @@ the Linux kernel carry out this sort of transformation, both now and in
 the future.
 
 
-\subsection{Read Memory Barrier}
+\subsection{Read memory barrier}
 
 The Linux kernel's read memory barrier is \co{smp_rmb()}.
 If a CPU executes the following code:
@@ -245,7 +245,7 @@ from~\qco{x}.
 However, you are usually better off using an acquire load, as described
 in the ``Acquire Operations'' section below.
 
-\subsection{Compiler Barrier}
+\subsection{Compiler barrier}
 
 The Linux kernel's compiler barrier is \co{barrier()}.
 This primitive prohibits compiler code-motion optimizations that might
@@ -272,7 +272,7 @@ Note that the barriers discussed previously use \co{barrier()} or its low-level
 equivalent in their implementations.
 
 
-\section{Ordered Memory Accesses}
+\subsection{Ordered memory accesses}
 
 The Linux kernel provides a wide variety of ordered memory accesses:
 
@@ -289,7 +289,7 @@ The Linux kernel provides a wide variety of ordered memory accesses:
 Each of the above categories has its own section below.
 
 
-\subsection{Release Operations}
+\subsection{Release operations}
 
 Release operations include \co{smp_store_release()}, \co{atomic_set_release()},
 \co{rcu_assign_pointer()}, and value-returning RMW operations whose names
@@ -358,7 +358,7 @@ As mentioned earlier, release operations are often paired with acquire
 operations, which are the subject of the next section.
 
 
-\subsection{Acquire Operations}
+\subsubsection{Acquire operations}
 
 Acquire operations include \co{smp_load_acquire()}, \co{atomic_read_acquire()},
 and value-returning RMW operations whose names end in \co{_acquire}.
@@ -421,7 +421,7 @@ value will be zero or \co{r1}'s final value will be one, thus providing
 the required ordering.
 
 
-\subsection{RCU Read-Side Ordering}
+\subsubsection{RCU read-side ordering}
 
 This category includes read-side markers such as \co{rcu_read_lock()}
 and \co{rcu_read_unlock()} as well as pointer-traversal primitives such as
@@ -464,7 +464,7 @@ that returned it and a later \co{dereference()}, please read
 It can also be quite helpful to review uses in the Linux kernel.
 
 
-\subsection{Control Dependencies}
+\subsubsection{Control dependencies}
 
 A control dependency extends from a marked load (\co{READ_ONCE()} or stronger)
 through an \qco{if} condition to a marked store (\co{WRITE_ONCE()} or stronger)
@@ -492,7 +492,7 @@ all of the compilers used to build the Linux kernel.
 Please see the \path{control-dependencies.txt} file for more information.
 
 
-\section{Unordered Accesses}
+\subsection{Unordered accesses}
 
 Each of these two categories of unordered accesses has a section below:
 
@@ -503,7 +503,7 @@ Each of these two categories of unordered accesses has a section below:
 \end{enumerate}
 
 
-\subsection{Unordered Marked Operations}
+\subsubsection{Unordered marked operations}
 
 Unordered operations to different variables are just that, unordered.
 However, if a group of CPUs apply these operations to a single variable,
@@ -555,7 +555,7 @@ operating on a single variable or unless they are constrained by one of
 the operations called out earlier in this document.
 
 
-\subsection{Unmarked C-Language Accesses}
+\subsubsection{Unmarked C-language accesses}
 
 Unmarked C-language accesses are normal variable accesses to normal
 variables, that is, to variables that are not \qco{volatile} and are not

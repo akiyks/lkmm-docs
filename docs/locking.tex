@@ -1,4 +1,4 @@
-\chapter{Locking}
+\section{Locking}
 
 Locking is well-known and the common use cases are straightforward:
 Any CPU holding a given lock sees any changes previously seen or made by any
@@ -10,7 +10,7 @@ However, developers who would like to also access lock-protected shared
 variables outside of their corresponding locks should continue reading.
 
 
-\section{Locking and Prior Accesses}
+\subsection{Locking and prior accesses}
 
 The basic rule of locking is worth repeating:
 
@@ -50,7 +50,7 @@ then the final value of \co{r1} must also be equal to~1.
 In contrast, the weaker rule would say nothing about the final value of \co{r1}.
 
 
-\section{Locking and Subsequent Accesses}
+\subsection{Locking and subsequent accesses}
 
 The converse to the basic rule also holds:
 Any CPU holding a given lock will not see any changes that will be made
@@ -88,7 +88,7 @@ locking basic rule extend across multiple acquisitions of a given lock
 across multiple CPUs.
 
 
-\section{Double-Checked Locking}
+\subsection{Double-checked locking}
 
 It is well known that more than just a lock is required to make
 double-checked locking work correctly.
@@ -156,7 +156,7 @@ corresponding lock, you will need to provide additional ordering, in
 this case, via the \co{smp_load_acquire()} and the \co{smp_store_release()}.
 
 
-\section{Ordering Provided by a Lock to CPUs Not Holding That Lock}
+\subsection{Ordering provided by a lock to CPUs not holding that lock}
 
 It is not necessarily the case that accesses ordered by locking will be
 seen as ordered by CPUs not holding that lock.
@@ -231,7 +231,7 @@ the counter-intuitive result where the final value of \co{r0} is~1, the final
 value of \co{z} is~2, and the final value of \co{r1} is~0.
 
 
-\section{No Roach-Motel Locking!}
+\subsection{No roach-motel locking!}
 
 This example requires familiarity with the \co{herd7} \qco{filter} clause, so
 please read up on that topic in \path{litmus-tests.txt}.

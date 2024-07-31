@@ -1,6 +1,6 @@
-\chapter{Linux-Kernel Memory Model Litmus Tests}
+\section{Linux-kernel memory model litmus tests}
 
-This file describes the LKMM litmus-test format by example, describes
+This section describes the LKMM litmus-test format by example, describes
 some tricks and traps, and finally outlines LKMM's limitations.
 Earlier versions of this material appeared in a number of LWN articles,
 including:
@@ -22,7 +22,7 @@ For information on installing LKMM, including the underlying \qco{herd7}
 tool, please see \path{tools/memory-model/README}.
 
 
-\section{Copy-Pasta}
+\subsection{Copy-pasta}
 
 As with other software, it is often better (if less macho) to adapt an
 existing litmus test than it is to create one from scratch.
@@ -48,7 +48,7 @@ But even if you start with an existing litmus test, it is still helpful
 to have a good understanding of the litmus-test format.
 
 
-\section{Examples and Format}
+\subsection{Examples and format}
 
 This section describes the overall format of litmus tests, starting
 with a small example of the message-passing pattern and moving on to
@@ -56,7 +56,7 @@ more complex examples that illustrate explicit initialization and LKMM's
 minimalistic set of flow-control statements.
 
 
-\subsection{Message-Passing Example}
+\subsubsection{Message-passing example}
 
 This section gives an overview of the format of a litmus test using an
 example based on the common message-passing use case.
@@ -294,7 +294,7 @@ affected by a given change to LKMM\@.
 \end{fcvref}
 
 
-\subsection{Initialization}
+\subsubsection{Initialization}
 
 The previous example relied on the default zero initialization for~\qco{x}
 and~\qco{y}, but a similar litmus test could instead initialize them
@@ -362,7 +362,7 @@ See the section below on linked lists to learn more about why this approach
 to initialization can be useful.
 
 
-\subsection{Control Structures}
+\subsubsection{Control structures}
 
 LKMM supports the C-language \qco{if} statement, which allows modeling of
 conditional branches.
@@ -434,7 +434,7 @@ which are discussed below.
 In addition, loop-unrolling tricks may be applied, albeit sparingly.
 
 
-\section{Tricks and Traps}
+\subsection{Tricks and traps}
 
 This section covers extracting debug output from \co{herd7}, emulating
 spin loops, handling trivial linked lists, adding comments to litmus tests,
@@ -442,7 +442,7 @@ emulating \co{call_rcu()}, and finally tricks to improve \co{herd7} performance
 in order to better handle large litmus tests.
 
 
-\subsection{Debug Output}
+\subsubsection{Debug output}
 
 By default, the \co{herd7} state output includes all variables mentioned
 in the \qco{exists} clause.
@@ -578,7 +578,7 @@ For one example, please see the \path{C-READ_ONCE.litmus} and
 \end{itemize}
 
 
-\subsection{Spin Loops}
+\subsubsection{Spin loops}
 
 The analysis carried out by \co{herd7} explores full state space, which is
 at best of exponential time complexity.
@@ -805,7 +805,7 @@ and once at the final assignment to \qco{1:r2}.
 \end{fcvref}
 
 
-\subsection{Linked Lists}
+\subsubsection{Linked lists}
 
 LKMM can handle linked lists, but only linked lists in which each node
 contains nothing except a pointer to the next node in the list.
@@ -900,7 +900,7 @@ would occur if \co{P1()} loaded a pointer to~\qco{x}, but obtained
 the pre-initialization value of zero after dereferencing that pointer.
 
 
-\subsection{Comments}
+\subsubsection{Comments}
 
 Different portions of a litmus test are processed by different parsers,
 which has the charming effect of requiring different comment syntax in
@@ -954,7 +954,7 @@ On the other hand, if you prefer C-style comments everywhere, the
 C preprocessor is your friend.
 
 
-\subsection{Asynchronous RCU Grace Periods}
+\subsubsection{Asynchronous RCU Grace Periods}
 
 The following litmus test is derived from the example show in
 \path{Documentation/litmus-tests/rcu/RCU+sync+free.litmus}, but
@@ -1028,7 +1028,7 @@ all executions in which \qco{2:r0} is not equal to the value~\qco{1}.
 \end{fcvref}
 
 
-\subsection{Performance}
+\subsubsection{Performance}
 
 LKMM's exploration of the full state-space can be extremely helpful,
 but it does not come for free.
@@ -1087,7 +1087,7 @@ However, please note that seeing the full set of states can be extremely
 helpful when developing and debugging litmus tests.
 
 
-\section{Limitations}
+\subsection{Limitations}
 
 Limitations of the Linux-kernel memory model (LKMM) include:
 

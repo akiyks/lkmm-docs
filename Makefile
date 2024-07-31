@@ -2,7 +2,7 @@ LATEX ?= pdflatex
 WHICH = command -v
 
 LATEXSOURCES = \
-	lkmm-docs-*.tex \
+	docs/*.tex \
 	lkmm-README.tex \
 	rcu/*.tex \
 	qqz.sty \
@@ -21,11 +21,11 @@ autodate.tex: $(LATEXSOURCES)
 
 lkmm-docs_flat.tex: autodate.tex
 	echo > qqz.tex
-	latexpand --empty-comments lkmm-docs-eb.tex 1> $@ 2> /dev/null
+	latexpand --empty-comments lkmm-docs.tex 1> $@ 2> /dev/null
 
 qqz.tex: lkmm-docs_flat.tex
 	sh utilities/extractqqz.sh < $< | perl utilities/qqzreorder.pl > $@
 
 lkmm-docs-eb.pdf: qqz.tex
-	latexmk -pdf lkmm-docs-eb.tex
+	latexmk -pdf lkmm-docs.tex
 

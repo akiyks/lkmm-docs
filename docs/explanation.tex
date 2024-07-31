@@ -1,4 +1,4 @@
-\chapter{Explanation of the Linux-Kernel Memory Consistency Model}
+\section{Explanation of the Linux-Kernel Memory Consistency Model}
 
 \begin{Note}
 \begin{description}
@@ -7,7 +7,7 @@
 \end{description}
 \end{Note}
 
-\section{Introduction}
+\subsection{Introduction}
 
 The Linux-kernel memory consistency model (LKMM) is rather complex and
 obscure.
@@ -43,7 +43,7 @@ the workings of the LKMM itself are covered.
   Converting them to the right format is left as an exercise for the reader.
 \end{Warn}
 
-\section{Background}
+\subsection{Background}
 \label{sec:docs:explanation:Background}
 
 A memory consistency model (or just memory model, for short) is
@@ -73,7 +73,7 @@ The LKMM has to be fairly permissive, in the sense that any behavior
 allowed by one of these architectures also has to be allowed by the LKMM\@.
 
 
-\section{A Simple Example}
+\subsection{A simple example}
 \label{sec:docs:explanation:A Simple Example}
 
 Here is a simple example to illustrate the basic concepts.
@@ -168,7 +168,7 @@ As it happens, the LKMM does predict this outcome can occur, and the example
 driver code shown above is indeed buggy.
 
 
-\section{A Selection of Memory Models}
+\subsection{A selection of memory models}
 
 The first widely cited memory model, and the simplest to understand,
 is Sequential Consistency.
@@ -251,7 +251,7 @@ x86, Alpha, and other architectures.
 However, it is different in detail from each of them.
 
 
-\section{Ordering and Cycles}
+\subsection{Ordering and cycles}
 \label{sec:docs:explanation:Ordering and Cycles}
 
 Memory models are all about ordering.
@@ -287,7 +287,7 @@ that outcome cannot occur.
 The LKMM is defined largely in terms of cycles, as we will see.
 
 
-\section{Events}
+\subsection{Events}
 \label{sec:docs:explanation:Events}
 
 The LKMM does not work directly with the C~statements that make up
@@ -336,7 +336,7 @@ The memory model requires certain of these relations to be orderings,
 that is, it requires them not to have any cycles.
 
 
-\section{The Program Order Relation: po and po-loc}
+\subsection{The program order relation: \co{po} and \co{po-loc}}
 \label{sec:docs:explanation:The Program Order Relation: po and po-loc}
 
 The most important relation between events is program order (\co{po}).
@@ -396,7 +396,7 @@ register (hence the convention that these variables have names
 starting with the letter `\co{r}').
 
 
-\section{A Warning}
+\subsection{A warning}
 \label{sec:docs:explanation:A Warning}
 
 The protections provided by \co{READ_ONCE()}, \co{WRITE_ONCE()}, and
@@ -452,7 +452,7 @@ between them.
 even interleave their object code.)
 
 
-\section{Dependency Relations: \co{data}, \co{addr}, and \co{ctrl}}
+\subsection{Dependency relations: \co{data}, \co{addr}, and \co{ctrl}}
 \label{sec:docs:explanation:Dependency Relations: data, addr, and ctrl}
 
 We say that two events are linked by a dependency relation when the
@@ -591,7 +591,7 @@ model.
 Be warned.
 
 
-\section{The Reads-from Relation: \co{rf}, \co{rfi}, and \co{rfe}}
+\subsection{The reads-from relation: \co{rf}, \co{rfi}, and \co{rfe}}
 \label{sec:docs:explanation:The Reads-from Relation: rf, rfi, and rfe}
 
 The reads-from relation (\co{rf}) links a write event to a read event when
@@ -668,7 +668,7 @@ It requires all accesses to be properly aligned and of the location's
 actual size.
 
 
-\section{Cache Coherence and The Coherence Order Relation: \co{co}, \co{coi}, and \co{coe}}
+\subsection{Cache coherence and the coherence order relation: \co{co}, \co{coi}, and \co{coe}}
 \label{sec:docs:explanation:Cache Coherence and The Coherence Order Relation}
 
 Cache coherence is a general principle requiring that in a
@@ -813,7 +813,7 @@ Coherence order is strictly per-location, or if you prefer, each
 location has its own independent coherence order.
 
 
-\section{The From-reads Relation: \co{fr}, \co{fri}, and \co{fre}}
+\subsection{The from-reads relation: \co{fr}, \co{fri}, and \co{fre}}
 \label{sec:docs:explanation:The From-reads Relation: fr, fri, and fre}
 
 The from-reads relation (\co{fr}) can be a little difficult for people to
@@ -862,7 +862,7 @@ In symbols,
 \end{VerbatimU}
 
 
-\section{An Operational Model}
+\subsection{An operational model}
 \label{sec:docs:explanation:An Operational Model}
 
 The LKMM is based on various operational memory models, meaning that
@@ -982,7 +982,7 @@ the fence (i.e., those which precede the fence in program order).
 fences have other properties which we discuss later.
 
 
-\section{Propagation Order Relation: \co{cumul-fence}}
+\subsection{Propagation order relation: \co{cumul-fence}}
 \label{sec:docs:explanation:Propagation Order Releation: cumul-fence}
 
 The fences which affect propagation order (i.e., strong, release, and
@@ -1009,7 +1009,7 @@ However, for different CPUs~\co{C} and~\co{C'}, it does not
 require \co{W} to propagate to~\co{C} before~\co{W'} propagates to~\co{C'}.
 
 
-\section{Derivation of The LKMM from The Operational Model}
+\subsection{Derivation of the LKMM from the operational model}
 \label{sec:docs:explanation:Derivation of The LKMM from The Operational Model}
 
 The LKMM is derived from the restrictions imposed by the design
@@ -1058,7 +1058,7 @@ The ``rcu'' and ``plain-coherence'' axioms are specific to the LKMM\@.
 Each of these axioms is discussed below.
 
 
-\section{Sequential Consistency per Variable}
+\subsection{Sequential consistency per variable}
 \label{sec:docs:explanation:Sequential Consistency per Variable}
 
 According to the principle of cache coherence, the stores to any fixed
@@ -1092,7 +1092,7 @@ true:
 This LKMM axiom implies that the four coherency rules are obeyed.
 
 
-\section{Atomic Updates: rmw}
+\subsection{Atomic updates: \co{rmw}}
 \label{sec:docs:explanation:Atomic Updates: rmw}
 
 What does it mean to say that a read-modify-write (rmw) update, such
@@ -1180,7 +1180,7 @@ updates with full-barrier semantics did not always guarantee ordering
 at least as strong as atomic updates with release-barrier semantics.)
 
 
-\section{The Preserved Program Order Relation: ppo}
+\subsection{The preserved program order relation: \co{ppo}}
 \label{sec:docs:explanation:The Preserved Program Order Relation: ppo}
 
 There are many situations where a CPU is obliged to execute two
@@ -1320,7 +1320,7 @@ The model avoided violating the write-write coherence rule by
 requiring the CPU not to send the \co{W}~write to the memory subsystem at all!)
 
 
-\section{And Then There Was Alpha}
+\subsection{And then there was Alpha}
 \label{sec:docs:explanation:And Then There Was Alpha}
 
 As mentioned above, the Alpha architecture is unique in that it does
@@ -1425,7 +1425,7 @@ And of course, none of this matters for any architecture other than
 Alpha.
 
 
-\section{The Happens-before Relation: hb}
+\subsection{The happens-before relation: \co{hb}}
 \label{sec:docs:explanation:The Happens-before Relation: hb}
 
 The happens-before relation (\co{hb}) links memory accesses that have to
@@ -1643,7 +1643,7 @@ It relies on the particular properties of strong fences, which we
 cover in the next section.
 
 
-\section{The Propagates-before Relation: pb}
+\subsection{The propagates-before relation: \co{pb}}
 \label{sec:docs:explanation:The Propagates-before Relation: pb}
 
 The propagates-before (\co{pb}) relation capitalizes on the special
@@ -1739,7 +1739,7 @@ they execute means that it cannot have cycles.
 This requirement is the content of the LKMM's ``propagation'' axiom.
 
 
-\section{RCU Relations: rcu-link, rcu-gp, rcu-rscsi, rcu-order, rcu-fence, and rb}
+\subsection{RCU relations: \co{rcu-link}, \co{rcu-gp}, \co{rcu-rscsi}, \co{rcu-order}, \co{rcu-fence}, and \co{rb}}
 \label{sec:docs:explanation:RCU Relations: rcu-link, rcu-gp, rcu-rscsi, rcu-order, rcu-fence, and rb}
 
 RCU (Read-Copy-Update) is a powerful synchronization mechanism.
@@ -2161,7 +2161,7 @@ critical sections and their SRCU counterparts, as described in the
 next section.
 
 
-\section{SRCU Read-side Critical Sections}
+\subsection{SRCU read-side critical sections}
 \label{sec:docs:explanation:SRCU Read-side Critical Sections}
 
 The LKMM uses the \co{srcu-rscsi} relation to model SRCU read-side critical
@@ -2365,7 +2365,7 @@ To avoid such problems,
 the intermediate \co{->data} links (\co{B} above) is an \co{srcu-unlock} event.
 
 
-\section{Locking}
+\subsection{Locking}
 \label{sec:docs:explanation:Locking}
 
 The LKMM includes locking.
@@ -2548,7 +2548,7 @@ architectures supported by the Linux kernel, albeit for various
 differing reasons.
 
 
-\section{Plain Accesses and Data Races}
+\subsection{Plain accesses and data races}
 \label{sec:docs:explanation:Plain Accesses and Data Races}
 
 In the LKMM, memory accesses such as \co{READ_ONCE(x)}, \co{atomic_inc(&y)},
@@ -3234,7 +3234,7 @@ contribute to the \co{ppo} relation), but at the moment it seems that this
 minimal, conservative approach is good enough.
 
 
-\section{Odds and Ends}
+\subsection{Odds and ends}
 \label{sec:docs:explanation:Odds and Ends}
 
 This section covers material that didn't quite fit anywhere in the
