@@ -1,0 +1,1414 @@
+\section{What is RCU?---``Read, Copy, Update''}
+\label{sec:rcu:What is RCU? Read, Copy, Update}
+
+\begin{Note}
+  Introductory lists and paragraphs in Linux kernel documentation are
+  skipped for the moment.
+
+  Quick Quizzes are rendered in perfbook's way.
+  The answers go to a later chapter in this PDF\@.
+\end{Note}
+
+\subsection{RCU overview}
+\label{sec:rcu:RCU overview}
+
+The basic idea behind RCU is to split updates into ``removal'' and
+``reclamation'' phases.
+The removal phase removes references to data items
+within a data structure (possibly by replacing them with references to
+new versions of these data items), and can run concurrently with readers.
+The reason that it is safe to run the removal phase concurrently with
+readers is the semantics of modern CPUs guarantee that readers will see
+either the old or the new version of the data structure rather than a
+partially updated reference.
+The reclamation phase does the work of reclaiming
+(e.g., freeing) the data items removed from the data structure during the
+removal phase.
+Because reclaiming data items can disrupt any readers
+concurrently referencing those data items, the reclamation phase must
+not start until readers no longer hold references to those data items.
+
+Splitting the update into removal and reclamation phases permits the
+updater to perform the removal phase immediately, and to defer the
+reclamation phase until all readers active during the removal phase have
+completed, either by blocking until they finish or by registering a
+callback that is invoked after they finish.
+Only readers that are active
+during the removal phase need be considered, because any reader starting
+after the removal phase will be unable to gain a reference to the removed
+data items, and therefore cannot be disrupted by the reclamation phase.
+
+So the typical RCU update sequence goes something like the following:
+
+\begin{enumerate}[(a)]
+\item	Remove pointers to a data structure, so that subsequent
+	readers cannot gain a reference to it.
+
+\item	Wait for all previous readers to complete their RCU read-side
+	critical sections.
+
+\item	At this point, there cannot be any readers who hold references
+	to the data structure, so it now may safely be reclaimed
+	(e.g., \co{kfree()}'d).
+\end{enumerate}
+
+Step~(b) above is the key idea underlying RCU's deferred destruction.
+The ability to wait until all readers are done allows RCU readers to
+use much lighter-weight synchronization, in some cases, absolutely no
+synchronization at all.
+In contrast, in more conventional lock-based
+schemes, readers must use heavy-weight synchronization in order to
+prevent an updater from deleting the data structure out from under them.
+This is because lock-based updaters typically update data items in place,
+and must therefore exclude readers.
+In contrast, RCU-based updaters
+typically take advantage of the fact that writes to single aligned
+pointers are atomic on modern CPUs, allowing atomic insertion, removal,
+and replacement of data items in a linked structure without disrupting
+readers.
+Concurrent RCU readers can then continue accessing the old
+versions, and can dispense with the atomic operations, memory barriers,
+and communications cache misses that are so expensive on present-day
+SMP computer systems, even in absence of lock contention.
+
+In the three-step procedure shown above, the updater is performing both
+the removal and the reclamation step, but it is often helpful for an
+entirely different thread to do the reclamation, as is in fact the case
+in the Linux kernel's directory-entry cache (dcache).
+Even if the same
+thread performs both the update step (step~(a) above) and the reclamation
+step (step~(c) above), it is often helpful to think of them separately.
+For example, RCU readers and updaters need not communicate at all,
+but RCU provides implicit low-overhead communication between readers
+and reclaimers, namely, in step~(b) above.
+
+So how the heck can a reclaimer tell when a reader is done, given
+that readers are not doing any sort of synchronization operations???
+Read on to learn about how RCU's API makes this easy.
+
+\subsection{What is RCU's core API?}
+\label{sec:rcu:What is RCU's core API?}
+
+The core RCU API is quite small:
+
+\begin{enumerate}[(a)]
+\item	\tco{rcu_read_lock()}
+\item	\tco{rcu_read_unlock()}
+\item	\tco{synchronize_rcu()} / \tco{call_rcu()}
+\item	\tco{rcu_assign_pointer()}
+\item	\tco{rcu_dereference()}
+\end{enumerate}
+
+There are many other members of the RCU API, but the rest can be
+expressed in terms of these five, though most implementations instead
+express \co{synchronize_rcu()} in terms of the \co{call_rcu()} callback API\@.
+
+The five core RCU APIs are described below, the other 18 will be enumerated
+later.
+See the kernel docbook documentation for more info, or look directly
+at the function header comments.
+
+\begin{description}
+\item[\tco{rcu_read_lock()}] {~}
+
+\begin{VerbatimU}
+	void rcu_read_lock(void);
+\end{VerbatimU}
+
+	This temporal primitive is used by a reader to inform the
+	reclaimer that the reader is entering an RCU read-side critical
+	section.
+	It is illegal to block while in an RCU read-side
+	critical section, though kernels built with \co{CONFIG_PREEMPT_RCU}
+	can preempt RCU read-side critical sections.
+	Any RCU-protected
+	data structure accessed during an RCU read-side critical section
+	is guaranteed to remain unreclaimed for the full duration of that
+	critical section.
+	Reference counts may be used in conjunction
+	with RCU to maintain longer-term references to data structures.
+
+	Note that anything that disables bottom halves, preemption,
+	or interrupts also enters an RCU read-side critical section.
+	Acquiring a spinlock also enters an RCU read-side critical
+	sections, even for spinlocks that do not disable preemption,
+	as is the case in kernels built with \co{CONFIG_PREEMPT_RT=y}.
+	Sleeplocks do \emph{not} enter RCU read-side critical sections.
+
+\item[\tco{rcu_read_unlock()}] {~}
+
+\begin{VerbatimU}
+	void rcu_read_unlock(void);
+\end{VerbatimU}
+
+	This temporal primitives is used by a reader to inform the
+	reclaimer that the reader is exiting an RCU read-side critical
+	section.
+	Anything that enables bottom halves, preemption,
+	or interrupts also exits an RCU read-side critical section.
+	Releasing a spinlock also exits an RCU read-side critical section.
+
+	Note that RCU read-side critical sections may be nested and/or
+	overlapping.
+
+\item[\tco{synchronize_rcu()}] {~}
+
+\begin{VerbatimU}
+	void synchronize_rcu(void);
+\end{VerbatimU}
+
+	This temporal primitive marks the end of updater code and the
+	beginning of reclaimer code.
+	It does this by blocking until
+	all pre-existing RCU read-side critical sections on all CPUs
+	have completed.
+	Note that \co{synchronize_rcu()} will \emph{not}
+	necessarily wait for any subsequent RCU read-side critical
+	sections to complete.
+	For example, consider the following
+	sequence of events:
+
+\begin{VerbatimU}[gobble=1]
+	         CPU 0                   CPU 1                  CPU 2
+	     -----------------  -------------------------  -----------------
+	 1.  rcu_read_lock()
+	 2.                     enters synchronize_rcu()
+	 3.                                                rcu_read_lock()
+	 4.  rcu_read_unlock()
+	 5.                     exits synchronize_rcu()
+	 6.                                                rcu_read_unlock()
+\end{VerbatimU}
+
+	To reiterate, \co{synchronize_rcu()} waits only for ongoing RCU
+	read-side critical sections to complete, not necessarily for
+	any that begin after \co{synchronize_rcu()} is invoked.
+
+	Of course, \co{synchronize_rcu()} does not necessarily return
+	\emph{immediately} after the last pre-existing RCU read-side critical
+	section completes.
+	For one thing, there might well be scheduling
+	delays.
+	For another thing, many RCU implementations process
+	requests in batches in order to improve efficiencies, which can
+	further delay \co{synchronize_rcu()}.
+
+	Since \co{synchronize_rcu()} is the API that must figure out when
+	readers are done, its implementation is key to RCU\@.
+	For RCU
+	to be useful in all but the most read-intensive situations,
+	\co{synchronize_rcu()}'s overhead must also be quite small.
+
+	The \co{call_rcu()} API is an asynchronous callback form of
+	\co{synchronize_rcu()}, and is described in more detail in a later
+	section.
+	Instead of blocking, it registers a function and
+	argument which are invoked after all ongoing RCU read-side
+	critical sections have completed.
+	This callback variant is
+	particularly useful in situations where it is illegal to block
+	or where update-side performance is critically important.
+
+	However, the \co{call_rcu()} API should not be used lightly, as use
+	of the \co{synchronize_rcu()} API generally results in simpler code.
+	In addition, the \co{synchronize_rcu()} API has the nice property
+	of automatically limiting update rate should grace periods
+	be delayed.
+	This property results in system resilience in face
+	of denial-of-service attacks.
+	Code using \co{call_rcu()} should limit
+	update rate in order to gain this same sort of resilience.
+	See \cref{sec:rcu:Review checklist for RCU patches}
+	for some approaches to limiting the update rate.
+
+\item[\tco{rcu_assign_pointer()}] {~}
+
+\begin{VerbatimU}
+	void rcu_assign_pointer(p, typeof(p) v);
+\end{VerbatimU}
+
+	Yes, \co{rcu_assign_pointer()} \emph{is} implemented as a macro, though
+	it would be cool to be able to declare a function in this manner.
+	(And there has been some discussion of adding overloaded functions
+	to the C language, so who knows?)
+
+	The updater uses this spatial macro to assign a new value to an
+	RCU-protected pointer, in order to safely communicate the change
+	in value from the updater to the reader.
+	This is a spatial (as
+	opposed to temporal) macro.
+	It does not evaluate to an rvalue,
+	but it does provide any compiler directives and memory-barrier
+	instructions required for a given compile or CPU architecture.
+	Its ordering properties are that of a store-release operation,
+	that is, any prior loads and stores required to initialize the
+	structure are ordered before the store that publishes the pointer
+	to that structure.
+
+	Perhaps just as important, \co{rcu_assign_pointer()} serves to document
+	\begin{enumerate*}[(1)]
+	\item which pointers are protected by RCU and
+	\item the point at which
+	a given structure becomes accessible to other CPUs.
+	\end{enumerate*}
+	That said,
+	\co{rcu_assign_pointer()} is most frequently used indirectly, via
+	the \co{_rcu list}-manipulation primitives such as \co{list_add_rcu()}.
+
+\item[\tco{rcu_dereference()}] {~}
+
+\begin{VerbatimU}
+	typeof(p) rcu_dereference(p);
+\end{VerbatimU}
+
+	Like \co{rcu_assign_pointer()}, \co{rcu_dereference()} must be implemented
+	as a macro.
+
+	The reader uses the spatial \co{rcu_dereference()} macro to fetch
+	an RCU-protected pointer, which returns a value that may
+	then be safely dereferenced.
+	Note that \co{rcu_dereference()}
+	does not actually dereference the pointer, instead, it
+	protects the pointer for later dereferencing.
+	It also
+	executes any needed memory-barrier instructions for a given
+	CPU architecture.
+	Currently, only Alpha needs memory barriers
+	within \co{rcu_dereference()}---on other CPUs, it compiles to a
+	volatile load.
+	However, no mainstream C~compilers respect
+	address dependencies, so \co{rcu_dereference()} uses volatile casts,
+	which, in combination with the coding guidelines listed in
+	\cref{sec:rcu:Proper care and feeding of return values from rcu_dereference()},
+	prevent current compilers from breaking
+	these dependencies.
+
+	Common coding practice uses \co{rcu_dereference()} to copy an
+	RCU-protected pointer to a local variable, then dereferences
+	this local variable, for example as follows:
+
+\begin{VerbatimU}
+		p = rcu_dereference(head.next);
+		return p->data;
+\end{VerbatimU}
+
+	However, in this case, one could just as easily combine these
+	into one statement:
+
+\begin{VerbatimU}
+		return rcu_dereference(head.next)->data;
+\end{VerbatimU}
+
+	If you are going to be fetching multiple fields from the
+	RCU-protected structure, using the local variable is of
+	course preferred.
+	Repeated \co{rcu_dereference()} calls look
+	ugly, do not guarantee that the same pointer will be returned
+	if an update happened while in the critical section, and incur
+	unnecessary overhead on Alpha CPUs.
+
+	Note that the value returned by \co{rcu_dereference()} is valid
+	only within the enclosing RCU read-side critical section.\footnote{
+		The variant \co{rcu_dereference_protected()} can be used outside
+		of an RCU read-side critical section as long as the usage is
+		protected by locks acquired by the update-side code.
+		This variant
+		avoids the lockdep warning that would happen when using (for
+		example) \co{rcu_dereference()} without \co{rcu_read_lock()} protection.
+		Using \co{rcu_dereference_protected()} also has the advantage
+		of permitting compiler optimizations that \co{rcu_dereference()}
+		must prohibit.
+		The \co{rcu_dereference_protected()} variant takes
+		a lockdep expression to indicate which locks must be acquired
+		by the caller.
+		If the indicated protection is not provided,
+		a lockdep splat is emitted.
+		See \path{Design/Requirements/Requirements.rst}
+		and the API's code comments for more details and example usage.}
+	For example, the following is \emph{not} legal:
+
+\begin{VerbatimU}
+		rcu_read_lock();
+		p = rcu_dereference(head.next);
+		rcu_read_unlock();
+		x = p->address;	/* BUG!!! */
+		rcu_read_lock();
+		y = p->data;	/* BUG!!! */
+		rcu_read_unlock();
+\end{VerbatimU}
+
+	Holding a reference from one RCU read-side critical section
+	to another is just as illegal as holding a reference from
+	one lock-based critical section to another!
+	Similarly,
+	using a reference outside of the critical section in which
+	it was acquired is just as illegal as doing so with normal
+	locking.
+
+	As with \co{rcu_assign_pointer()}, an important function of
+	\co{rcu_dereference()} is to document which pointers are protected by
+	RCU, in particular, flagging a pointer that is subject to changing
+	at any time, including immediately after the \co{rcu_dereference()}.
+	And, again like \co{rcu_assign_pointer()}, \co{rcu_dereference()} is
+	typically used indirectly, via the \co{_rcu} list-manipulation
+	primitives, such as \co{list_for_each_entry_rcu()}.\footnote{
+		If the \co{list_for_each_entry_rcu()} instance might be used by
+		update-side code as well as by RCU readers, then an additional
+		lockdep expression can be added to its list of arguments.
+		For example, given an additional \qtco{lock_is_held(&mylock)} argument,
+		the RCU lockdep code would complain only if this instance was
+		invoked outside of an RCU read-side critical section and without
+		the protection of mylock.}
+\end{description}
+
+The following diagram shows how each API communicates among the
+reader, updater, and reclaimer.
+
+\begin{VerbatimU}
+
+	    rcu_assign_pointer()
+	                            +--------+
+	    +---------------------->| reader |---------+
+	    |                       +--------+         |
+	    |                           |              |
+	    |                           |              | Protect:
+	    |                           |              | rcu_read_lock()
+	    |                           |              | rcu_read_unlock()
+	    |        rcu_dereference()  |              |
+	    +---------+                 |              |
+	    | updater |<----------------+              |
+	    +---------+                                V
+	    |                                    +-----------+
+	    +----------------------------------->| reclaimer |
+	                                         +-----------+
+	      Defer:
+	      synchronize_rcu() & call_rcu()
+\end{VerbatimU}
+
+The RCU infrastructure observes the temporal sequence of \co{rcu_read_lock()},
+\co{rcu_read_unlock()}, \co{synchronize_rcu()}, and \co{call_rcu()} invocations in
+order to determine when
+\begin{enumerate*}[(1)]
+\item \tco{synchronize_rcu()} invocations may return
+to their callers and
+\item \tco{call_rcu()} callbacks may be invoked.
+\end{enumerate*}
+Efficient
+implementations of the RCU infrastructure make heavy use of batching in
+order to amortize their overhead over many uses of the corresponding APIs.
+The \co{rcu_assign_pointer()} and \co{rcu_dereference()} invocations communicate
+spatial changes via stores to and loads from the RCU-protected pointer in
+question.
+
+There are at least three flavors of RCU usage in the Linux kernel.
+The diagram
+above shows the most common one.
+On the updater side, the \co{rcu_assign_pointer()},
+\co{synchronize_rcu()} and \co{call_rcu()} primitives used are the same for all three
+flavors.
+However for protection (on the reader side), the primitives used vary
+depending on the flavor:
+
+\begin{enumerate}[(a)]
+\item	\tco{rcu_read_lock()} / \tco{rcu_read_unlock()} \\
+	\tco{rcu_dereference()}
+
+\item	\tco{rcu_read_lock_bh()} / \tco{rcu_read_unlock_bh()} \\
+	\tco{local_bh_disable()} / \tco{local_bh_enable()} \\
+	\tco{rcu_dereference_bh()}
+
+\item	\tco{rcu_read_lock_sched()} / \tco{rcu_read_unlock_sched()} \\
+	\tco{preempt_disable()} / \tco{preempt_enable()} \\
+	\tco{local_irq_save()} / \tco{local_irq_restore()} \\
+	\tco{hardirq enter} / \tco{hardirq exit} \\
+	\tco{NMI enter} / \tco{NMI exit} \\
+	\tco{rcu_dereference_sched()}
+\end{enumerate}
+
+These three flavors are used as follows:
+
+\begin{enumerate}[(a)]
+\item	RCU applied to normal data structures.
+
+\item	RCU applied to networking data structures that may be subjected
+	to remote denial-of-service attacks.
+
+\item	RCU applied to scheduler and interrupt/NMI-handler tasks.
+\end{enumerate}
+
+Again, most uses will be of~(a).
+The~(b) and~(c) cases are important
+for specialized uses, but are relatively uncommon.
+The SRCU, RCU-Tasks, RCU-Tasks-Rude, and RCU-Tasks-Trace have similar relationships among
+their assorted primitives.
+
+\subsection{What are some example uses of core RCU API?}
+\label{sec:rcu:What are some example uses of core RCU API?}
+
+This section shows a simple use of the core RCU API to protect a
+global pointer to a dynamically allocated structure.
+More-typical
+uses of RCU may be found in \path{listRCU.rst} and \path{NMI-RCU.rst}.
+
+\begin{VerbatimU}[samepage=false,breaklines=true]
+	struct foo {
+		int a;
+		char b;
+		long c;
+	};
+	DEFINE_SPINLOCK(foo_mutex);
+
+	struct foo __rcu *gbl_foo;
+
+	/*
+	 * Create a new struct foo that is the same as the one currently
+	 * pointed to by gbl_foo, except that field "a" is replaced
+	 * with "new_a".  Points gbl_foo to the new structure, and
+	 * frees up the old structure after a grace period.
+	 *
+	 * Uses rcu_assign_pointer() to ensure that concurrent readers
+	 * see the initialized version of the new structure.
+	 *
+	 * Uses synchronize_rcu() to ensure that any readers that might
+	 * have references to the old structure complete before freeing
+	 * the old structure.
+	 */
+	void foo_update_a(int new_a)
+	{
+		struct foo *new_fp;
+		struct foo *old_fp;
+
+		new_fp = kmalloc(sizeof(*new_fp), GFP_KERNEL);
+		spin_lock(&foo_mutex);
+		old_fp = rcu_dereference_protected(gbl_foo, lockdep_is_held(&foo_mutex));
+		*new_fp = *old_fp;
+		new_fp->a = new_a;
+		rcu_assign_pointer(gbl_foo, new_fp);
+		spin_unlock(&foo_mutex);
+		synchronize_rcu();
+		kfree(old_fp);
+	}
+
+	/*
+	 * Return the value of field "a" of the current gbl_foo
+	 * structure.  Use rcu_read_lock() and rcu_read_unlock()
+	 * to ensure that the structure does not get deleted out
+	 * from under us, and use rcu_dereference() to ensure that
+	 * we see the initialized version of the structure (important
+	 * for DEC Alpha and for people reading the code).
+	 */
+	int foo_get_a(void)
+	{
+		int retval;
+
+		rcu_read_lock();
+		retval = rcu_dereference(gbl_foo)->a;
+		rcu_read_unlock();
+		return retval;
+	}
+\end{VerbatimU}
+
+So, to sum up:
+
+\begin{itemize}
+\item	Use \co{rcu_read_lock()} and \co{rcu_read_unlock()} to guard RCU
+	read-side critical sections.
+
+\item	Within an RCU read-side critical section, use \co{rcu_dereference()}
+	to dereference RCU-protected pointers.
+
+\item	Use some solid design (such as locks or semaphores) to
+	keep concurrent updates from interfering with each other.
+
+\item	Use \co{rcu_assign_pointer()} to update an RCU-protected pointer.
+	This primitive protects concurrent readers from the updater,
+	\emph{not} concurrent updates from each other!
+	You therefore still
+	need to use locking (or something similar) to keep concurrent
+	\co{rcu_assign_pointer()} primitives from interfering with each other.
+
+\item	Use \co{synchronize_rcu()} \emph{after} removing a data element from an
+	RCU-protected data structure, but \emph{before} reclaiming/freeing
+	the data element, in order to wait for the completion of all
+	RCU read-side critical sections that might be referencing that
+	data item.
+\end{itemize}
+
+See \cref{sec:rcu:Review checklist for RCU patches}
+for additional rules to follow when using RCU\@.
+And again, more-typical uses of RCU may be found in \path{listRCU.rst}
+and \path{NMI-RCU.rst}.
+
+
+\subsection{What if my updating thread cannot block?}
+\label{sec:rcu:What if my updating thread cannot block?}
+
+In the example above, \co{foo_update_a()} blocks until a grace period elapses.
+This is quite simple, but in some cases one cannot afford to wait so
+long---there might be other high-priority work to be done.
+
+In such cases, one uses \co{call_rcu()} rather than \co{synchronize_rcu()}.
+The \co{call_rcu()} API is as follows:
+
+\begin{VerbatimU}
+	void call_rcu(struct rcu_head *head, rcu_callback_t func);
+\end{VerbatimU}
+
+This function invokes \co{func(head)} after a grace period has elapsed.
+This invocation might happen from either softirq or process context,
+so the function is not permitted to block.
+The foo struct needs to
+have an \co{rcu_head} structure added, perhaps as follows:
+
+\begin{VerbatimU}
+	struct foo {
+		int a;
+		char b;
+		long c;
+		struct rcu_head rcu;
+	};
+\end{VerbatimU}
+
+The \co{foo_update_a()} function might then be written as follows:
+
+\begin{VerbatimU}[samepage=false,breaklines=true]
+	/*
+	 * Create a new struct foo that is the same as the one currently
+	 * pointed to by gbl_foo, except that field "a" is replaced
+	 * with "new_a".  Points gbl_foo to the new structure, and
+	 * frees up the old structure after a grace period.
+	 *
+	 * Uses rcu_assign_pointer() to ensure that concurrent readers
+	 * see the initialized version of the new structure.
+	 *
+	 * Uses call_rcu() to ensure that any readers that might have
+	 * references to the old structure complete before freeing the
+	 * old structure.
+	 */
+	void foo_update_a(int new_a)
+	{
+		struct foo *new_fp;
+		struct foo *old_fp;
+
+		new_fp = kmalloc(sizeof(*new_fp), GFP_KERNEL);
+		spin_lock(&foo_mutex);
+		old_fp = rcu_dereference_protected(gbl_foo, lockdep_is_held(&foo_mutex));
+		*new_fp = *old_fp;
+		new_fp->a = new_a;
+		rcu_assign_pointer(gbl_foo, new_fp);
+		spin_unlock(&foo_mutex);
+		call_rcu(&old_fp->rcu, foo_reclaim);
+	}
+\end{VerbatimU}
+
+The \co{foo_reclaim()} function might appear as follows:
+
+\begin{VerbatimU}
+	void foo_reclaim(struct rcu_head *rp)
+	{
+		struct foo *fp = container_of(rp, struct foo, rcu);
+
+		foo_cleanup(fp->a);
+
+		kfree(fp);
+	}
+\end{VerbatimU}
+
+The \co{container_of()} primitive is a macro that, given a pointer into a
+struct, the type of the struct, and the pointed-to field within the
+struct, returns a pointer to the beginning of the struct.
+
+The use of \co{call_rcu()} permits the caller of \co{foo_update_a()} to
+immediately regain control, without needing to worry further about the
+old version of the newly updated element.
+It also clearly shows the
+RCU distinction between updater, namely \co{foo_update_a()}, and reclaimer,
+namely \co{foo_reclaim()}.
+
+The summary of advice is the same as for the previous section, except
+that we are now using \co{call_rcu()} rather than \co{synchronize_rcu()}:
+
+\begin{itemize}
+\item	Use \co{call_rcu()} \emph{after} removing a data element from an
+	RCU-protected data structure in order to register a callback
+	function that will be invoked after the completion of all RCU
+	read-side critical sections that might be referencing that
+	data item.
+\end{itemize}
+
+If the callback for \co{call_rcu()} is not doing anything more than calling
+\co{kfree()} on the structure, you can use \co{kfree_rcu()} instead of \co{call_rcu()}
+to avoid having to write your own callback:
+
+\begin{VerbatimU}
+	kfree_rcu(old_fp, rcu);
+\end{VerbatimU}
+
+If the occasional sleep is permitted, the single-argument form may
+be used, omitting the \co{rcu_head} structure from \co{struct foo}.
+
+\begin{VerbatimU}
+	kfree_rcu_mightsleep(old_fp);
+\end{VerbatimU}
+
+This variant almost never blocks, but might do so by invoking
+\co{synchronize_rcu()} in response to memory-allocation failure.
+
+Again, see checklist.rst for additional rules governing the use of RCU\@.
+
+
+\subsection{What are some simple implementations of RCU?}
+\label{sec:rcu:What are some simple implementations of RCU?}
+
+One of the nice things about RCU is that it has extremely simple ``toy''
+implementations that are a good first step towards understanding the
+production-quality implementations in the Linux kernel.
+This section
+presents two such ``toy'' implementations of RCU, one that is implemented
+in terms of familiar locking primitives, and another that more closely
+resembles ``classic'' RCU\@.
+Both are way too simple for real-world use,
+lacking both functionality and performance.
+However, they are useful
+in getting a feel for how RCU works.
+See \path{kernel/rcu/update.c} for a
+production-quality implementation, and see:
+
+\begin{quote}
+	\url{https://docs.google.com/document/d/1X0lThx8OK0ZgLMqVoXiR4ZrGURHrXK6NyLRbeXe3Xac/edit}
+\end{quote}
+
+\noindent%
+for papers describing the Linux kernel RCU implementation.
+The OLS'01
+and OLS'02 papers are a good introduction, and the dissertation provides
+more details on the current implementation as of early 2004.
+
+
+\subsubsection{``Toy'' implementation 1: Locking}
+\label{sec:rcu:Toy implementation 1: Locking}
+
+This section presents a ``toy'' RCU implementation that is based on
+familiar locking primitives.
+Its overhead makes it a non-starter for
+real-life use, as does its lack of scalability.
+It is also unsuitable
+for realtime use, since it allows scheduling latency to ``bleed'' from
+one read-side critical section to another.
+It also assumes recursive
+reader-writer locks:
+If you try this with non-recursive locks, and
+you allow nested \co{rcu_read_lock()} calls, you can deadlock.
+
+However, it is probably the easiest implementation to relate to, so is
+a good starting point.
+
+It is extremely simple:
+
+\begin{VerbatimU}[samepage=false]
+	static DEFINE_RWLOCK(rcu_gp_mutex);
+
+	void rcu_read_lock(void)
+	{
+		read_lock(&rcu_gp_mutex);
+	}
+
+	void rcu_read_unlock(void)
+	{
+		read_unlock(&rcu_gp_mutex);
+	}
+
+	void synchronize_rcu(void)
+	{
+		write_lock(&rcu_gp_mutex);
+		smp_mb__after_spinlock();
+		write_unlock(&rcu_gp_mutex);
+	}
+\end{VerbatimU}
+
+\begin{Note}
+You can ignore \co{rcu_assign_pointer()} and \co{rcu_dereference()} without missing
+much.
+But here are simplified versions anyway.
+And whatever you do,
+don't forget about them when submitting patches making use of RCU\@!:
+
+\begin{VerbatimU}
+	#define rcu_assign_pointer(p, v) \
+	({ \
+		smp_store_release(&(p), (v)); \
+	})
+
+	#define rcu_dereference(p) \
+	({ \
+		typeof(p) _________p1 = READ_ONCE(p); \
+		(_________p1); \
+	})
+\end{VerbatimU}
+\end{Note}
+
+The \co{rcu_read_lock()} and \co{rcu_read_unlock()} primitive read-acquire
+and release a global reader-writer lock.
+The \co{synchronize_rcu()}
+primitive write-acquires this same lock, then releases it.
+This means
+that once \co{synchronize_rcu()} exits, all RCU read-side critical sections
+that were in progress before \co{synchronize_rcu()} was called are guaranteed
+to have completed---there is no way that \co{synchronize_rcu()} would have
+been able to write-acquire the lock otherwise.
+The \co{smp_mb__after_spinlock()}
+promotes \co{synchronize_rcu()} to a full memory barrier in compliance with
+the ``Memory-Barrier Guarantees'' listed in:
+
+\begin{quote}
+	\path{Design/Requirements/Requirements.rst}
+\end{quote}
+
+It is possible to nest \co{rcu_read_lock()}, since reader-writer locks may
+be recursively acquired.
+Note also that \co{rcu_read_lock()} is immune
+from deadlock (an important property of RCU\@).
+The reason for this is
+that the only thing that can block \co{rcu_read_lock()} is a \co{synchronize_rcu()}.
+But \co{synchronize_rcu()} does not acquire any locks while holding \co{rcu_gp_mutex},
+so there can be no deadlock cycle.
+
+\QuickQuiz{
+	Why is this argument naive?
+	How could a deadlock
+	occur when using this algorithm in a real-world Linux
+	kernel?
+	How could this deadlock be avoided?
+}\QuickQuizAnswer{
+	Consider the following sequence of events:
+
+	\begin{enumerate}
+	\item	CPU~0 acquires some unrelated lock, call it
+		\qtco{problematic_lock}, disabling irq via
+		\co{spin_lock_irqsave()}.
+
+	\item	CPU~1 enters \co{synchronize_rcu()}, write-acquiring
+		\co{rcu_gp_mutex}.
+
+	\item	CPU~0 enters \co{rcu_read_lock()}, but must wait
+		because CPU~1 holds \co{rcu_gp_mutex}.
+
+	\item	CPU~1 is interrupted, and the irq handler
+		attempts to acquire \co{problematic_lock}.
+	\end{enumerate}
+
+	The system is now deadlocked.
+
+	One way to avoid this deadlock is to use an approach like
+	that of \co{CONFIG_PREEMPT_RT}, where all normal spinlocks
+	become blocking locks, and all irq handlers execute in
+	the context of special tasks.
+	In this case, in step~4
+	above, the irq handler would block, allowing CPU~1 to
+	release \co{rcu_gp_mutex}, avoiding the deadlock.
+
+	Even in the absence of deadlock, this RCU implementation
+	allows latency to ``bleed'' from readers to other
+	readers through \co{synchronize_rcu()}.
+	To see this,
+	consider task~A in an RCU read-side critical section
+	(thus read-holding \co{rcu_gp_mutex}), task~B blocked
+	attempting to write-acquire \co{rcu_gp_mutex}, and
+	task~C blocked in \co{rcu_read_lock()} attempting to
+	read-acquire \co{rcu_gp_mutex}.
+	Task~A's RCU read-side
+	latency is holding up task~C, albeit indirectly via
+	task~B\@.
+
+	Realtime RCU implementations therefore use a counter-based
+	approach where tasks in RCU read-side critical sections
+	cannot be blocked by tasks executing \co{synchronize_rcu()}.
+}\QuickQuizEnd
+
+
+\subsubsection{``Toy'' example 2: Classic RCU}
+\label{sec:rcu:Toy example 2: Classic RCU}
+
+This section presents a ``toy'' RCU implementation that is based on
+``classic RCU\@''.
+It is also short on performance (but only for updates) and
+on features such as hotplug CPU and the ability to run in \co{CONFIG_PREEMPTION}
+kernels.
+The definitions of \co{rcu_dereference()} and \co{rcu_assign_pointer()}
+are the same as those shown in the preceding section, so they are omitted.
+
+\begin{VerbatimU}
+	void rcu_read_lock(void) { }
+
+	void rcu_read_unlock(void) { }
+
+	void synchronize_rcu(void)
+	{
+		int cpu;
+
+		for_each_possible_cpu(cpu)
+			run_on(cpu);
+	}
+\end{VerbatimU}
+
+Note that \co{rcu_read_lock()} and \co{rcu_read_unlock()} do absolutely nothing.
+This is the great strength of classic RCU in a non-preemptive kernel:
+read-side overhead is precisely zero, at least on non-Alpha CPUs.
+And there is absolutely no way that \co{rcu_read_lock()} can possibly
+participate in a deadlock cycle!
+
+The implementation of \co{synchronize_rcu()} simply schedules itself on each
+CPU in turn.
+The \co{run_on()} primitive can be implemented straightforwardly
+in terms of the \co{sched_setaffinity()} primitive.
+Of course, a somewhat less
+``toy'' implementation would restore the affinity upon completion rather
+than just leaving all tasks running on the last CPU, but when I said
+``toy'', I meant \emph{toy}!
+
+So how the heck is this supposed to work???
+
+Remember that it is illegal to block while in an RCU read-side critical
+section.
+Therefore, if a given CPU executes a context switch, we know
+that it must have completed all preceding RCU read-side critical sections.
+Once \emph{all} CPUs have executed a context switch, then \emph{all} preceding
+RCU read-side critical sections will have completed.
+
+So, suppose that we remove a data item from its structure and then invoke
+\co{synchronize_rcu()}.  Once \co{synchronize_rcu()} returns, we are guaranteed
+that there are no RCU read-side critical sections holding a reference
+to that data item, so we can safely reclaim it.
+
+\QuickQuiz{
+	Give an example where Classic RCU's read-side
+	overhead is \emph{negative}.
+}\QuickQuizAnswer{
+	Imagine a single-CPU system with a non-\co{CONFIG_PREEMPTION}
+	kernel where a routing table is used by process-context
+	code, but can be updated by irq-context code (for example,
+	by an ``ICMP REDIRECT'' packet).
+	The usual way of handling
+	this would be to have the process-context code disable
+	interrupts while searching the routing table.
+	Use of
+	RCU allows such interrupt-disabling to be dispensed with.
+	Thus, without RCU, you pay the cost of disabling interrupts,
+	and with RCU you don't.
+
+	One can argue that the overhead of RCU in this
+	case is negative with respect to the single-CPU
+	interrupt-disabling approach.
+	Others might argue that
+	the overhead of RCU is merely zero, and that replacing
+	the positive overhead of the interrupt-disabling scheme
+	with the zero-overhead RCU scheme does not constitute
+	negative overhead.
+
+	In real life, of course, things are more complex.
+	But
+	even the theoretical possibility of negative overhead for
+	a synchronization primitive is a bit unexpected.  ;-)
+}\QuickQuizEnd
+
+\QuickQuiz{
+	If it is illegal to block in an RCU read-side
+	critical section, what the heck do you do in
+	\co{CONFIG_PREEMPT_RT}, where normal spinlocks can block???
+}\QuickQuizAnswer{
+	Just as \co{CONFIG_PREEMPT_RT} permits preemption of spinlock
+	critical sections, it permits preemption of RCU
+	read-side critical sections.
+	It also permits
+	spinlocks blocking while in RCU read-side critical
+	sections.
+
+	Why the apparent inconsistency?  Because it is
+	possible to use priority boosting to keep the RCU
+	grace periods short if need be (for example, if running
+	short of memory).
+	In contrast, if blocking waiting
+	for (say) network reception, there is no way to know
+	what should be boosted.
+	Especially given that the
+	process we need to boost might well be a human being
+	who just went out for a pizza or something.
+	And although
+	a computer-operated cattle prod might arouse serious
+	interest, it might also provoke serious objections.
+	Besides, how does the computer know what pizza parlor
+	the human being went to???
+}\QuickQuizEnd
+
+
+\subsection{Analogy with reader-writer locking}
+\label{sec:rcu:Analogy with reader-writer locking}
+
+Although RCU can be used in many different ways, a very common use of
+RCU is analogous to reader-writer locking.
+The following unified
+diff shows how closely related RCU and reader-writer locking can be.
+
+\begin{VerbatimU}[samepage=false]
+	@@ -5,5 +5,5 @@ struct el {
+	 	int data;
+	 	/* Other data fields */
+	 };
+	-rwlock_t listmutex;
+	+spinlock_t listmutex;
+	 struct el head;
+
+	@@ -13,15 +14,15 @@
+		struct list_head *lp;
+		struct el *p;
+
+	-	read_lock(&listmutex);
+	-	list_for_each_entry(p, head, lp) {
+	+	rcu_read_lock();
+	+	list_for_each_entry_rcu(p, head, lp) {
+			if (p->key == key) {
+				*result = p->data;
+	-			read_unlock(&listmutex);
+	+			rcu_read_unlock();
+				return 1;
+			}
+		}
+	-	read_unlock(&listmutex);
+	+	rcu_read_unlock();
+		return 0;
+	 }
+
+	@@ -29,15 +30,16 @@
+	 {
+		struct el *p;
+
+	-	write_lock(&listmutex);
+	+	spin_lock(&listmutex);
+		list_for_each_entry(p, head, lp) {
+			if (p->key == key) {
+	-			list_del(&p->list);
+	-			write_unlock(&listmutex);
+	+			list_del_rcu(&p->list);
+	+			spin_unlock(&listmutex);
+	+			synchronize_rcu();
+				kfree(p);
+				return 1;
+			}
+		}
+	-	write_unlock(&listmutex);
+	+	spin_unlock(&listmutex);
+		return 0;
+	 }
+\end{VerbatimU}
+
+Or, for those who prefer a side-by-side listing:
+
+\begin{VerbatimU}
+ 1 struct el {                          1 struct el {
+ 2   struct list_head list;             2   struct list_head list;
+ 3   long key;                          3   long key;
+ 4   spinlock_t mutex;                  4   spinlock_t mutex;
+ 5   int data;                          5   int data;
+ 6   /* Other data fields */            6   /* Other data fields */
+ 7 };                                   7 };
+ 8 rwlock_t listmutex;                  8 spinlock_t listmutex;
+ 9 struct el head;                      9 struct el head;
+\end{VerbatimU}
+
+\begin{VerbatimU}[fontsize=\tiny]
+  1 int search(long key, int *result)    1 int search(long key, int *result)
+  2 {                                    2 {
+  3   struct list_head *lp;              3   struct list_head *lp;
+  4   struct el *p;                      4   struct el *p;
+  5                                      5
+  6   read_lock(&listmutex);             6   rcu_read_lock();
+  7   list_for_each_entry(p, head, lp) { 7   list_for_each_entry_rcu(p, head, lp) {
+  8     if (p->key == key) {             8     if (p->key == key) {
+  9       *result = p->data;             9       *result = p->data;
+ 10       read_unlock(&listmutex);      10       rcu_read_unlock();
+ 11       return 1;                     11       return 1;
+ 12     }                               12     }
+ 13   }                                 13   }
+ 14   read_unlock(&listmutex);          14   rcu_read_unlock();
+ 15   return 0;                         15   return 0;
+ 16 }                                   16 }
+\end{VerbatimU}
+
+\begin{VerbatimU}[fontsize=\tiny]
+  1 int delete(long key)                 1 int delete(long key)
+  2 {                                    2 {
+  3   struct el *p;                      3   struct el *p;
+  4                                      4
+  5   write_lock(&listmutex);            5   spin_lock(&listmutex);
+  6   list_for_each_entry(p, head, lp) { 6   list_for_each_entry(p, head, lp) {
+  7     if (p->key == key) {             7     if (p->key == key) {
+  8       list_del(&p->list);            8       list_del_rcu(&p->list);
+  9       write_unlock(&listmutex);      9       spin_unlock(&listmutex);
+                                        10       synchronize_rcu();
+ 10       kfree(p);                     11       kfree(p);
+ 11       return 1;                     12       return 1;
+ 12     }                               13     }
+ 13   }                                 14   }
+ 14   write_unlock(&listmutex);         15   spin_unlock(&listmutex);
+ 15   return 0;                         16   return 0;
+ 16 }                                   17 }
+\end{VerbatimU}
+
+Either way, the differences are quite small.
+Read-side locking moves
+to \co{rcu_read_lock()} and \co{rcu_read_unlock}, update-side locking moves from
+a reader-writer lock to a simple spinlock, and a \co{synchronize_rcu()}
+precedes the \co{kfree()}.
+
+However, there is one potential catch{:} the read-side and update-side
+critical sections can now run concurrently.
+In many cases, this will
+not be a problem, but it is necessary to check carefully regardless.
+For example, if multiple independent list updates must be seen as
+a single atomic update, converting to RCU will require special care.
+
+Also, the presence of \co{synchronize_rcu()} means that the RCU version of
+\co{delete()} can now block.
+If this is a problem, there is a callback-based
+mechanism that never blocks, namely \co{call_rcu()} or \co{kfree_rcu()}, that can
+be used in place of \co{synchronize_rcu()}.
+
+
+\subsection{Analogy with reference counting}
+\label{sec:rcu:Analogy with reference counting}
+
+The reader-writer analogy (illustrated by the previous section) is not
+always the best way to think about using RCU\@.
+Another helpful analogy
+considers RCU an effective reference count on everything which is
+protected by RCU\@.
+
+A reference count typically does not prevent the referenced object's
+values from changing, but does prevent changes to type---particularly the
+gross change of type that happens when that object's memory is freed and
+re-allocated for some other purpose.
+Once a type-safe reference to the
+object is obtained, some other mechanism is needed to ensure consistent
+access to the data in the object.
+This could involve taking a spinlock,
+but with RCU the typical approach is to perform reads with SMP-aware
+operations such as \co{smp_load_acquire()}, to perform updates with atomic
+read-modify-write operations, and to provide the necessary ordering.
+RCU provides a number of support functions that embed the required
+operations and ordering, such as the \co{list_for_each_entry_rcu()} macro
+used in the previous section.
+
+A more focused view of the reference counting behavior is that,
+between \co{rcu_read_lock()} and \co{rcu_read_unlock()}, any reference taken with
+\co{rcu_dereference()} on a pointer marked as \qtco{__rcu} can be treated as
+though a reference-count on that object has been temporarily increased.
+This prevents the object from changing type.
+Exactly what this means
+will depend on normal expectations of objects of that type, but it
+typically includes that spinlocks can still be safely locked, normal
+reference counters can be safely manipulated, and \qtco{__rcu} pointers
+can be safely dereferenced.
+
+Some operations that one might expect to see on an object for
+which an RCU reference is held include:
+
+\begin{itemize}
+\item Copying out data that is guaranteed to be stable by the object's type.
+\item Using \co{kref_get_unless_zero()} or similar to get a longer-term
+      reference.
+      This may fail of course.
+\item Acquiring a spinlock in the object, and checking if the object still
+      is the expected object and if so, manipulating it freely.
+\end{itemize}
+
+The understanding that RCU provides a reference that only prevents a
+change of type is particularly visible with objects allocated from a
+slab cache marked \qtco{SLAB_TYPESAFE_BY_RCU}.
+RCU operations may yield a
+reference to an object from such a cache that has been concurrently freed
+and the memory reallocated to a completely different object, though of
+the same type.
+In this case RCU doesn't even protect the identity of the
+object from changing, only its type.
+So the object found may not be the
+one expected, but it will be one where it is safe to take a reference
+(and then potentially acquiring a spinlock), allowing subsequent code
+to check whether the identity matches expectations.
+It is tempting
+to simply acquire the spinlock without first taking the reference, but
+unfortunately any spinlock in a \qtco{SLAB_TYPESAFE_BY_RCU}` object must be
+initialized after each and every call to \co{kmem_cache_alloc()}, which renders
+reference-free spinlock acquisition completely unsafe.
+Therefore, when
+using \qtco{SLAB_TYPESAFE_BY_RCU}, make proper use of a reference counter.
+(Those willing to initialize their locks in a \co{kmem_cache} constructor
+may also use locking, including cache-friendly sequence locking.)
+
+With traditional reference counting---such as that implemented by the
+kref library in Linux---there is typically code that runs when the last
+reference to an object is dropped.
+With kref, this is the function
+passed to \co{kref_put()}.
+When RCU is being used, such finalization code
+must not be run until all \qtco{__rcu} pointers referencing the object have
+been updated, and then a grace period has passed.
+Every remaining
+globally visible pointer to the object must be considered to be a
+potential counted reference, and the finalization code is typically run
+using \co{call_rcu()} only after all those pointers have been changed.
+
+To see how to choose between these two analogies---of RCU as a
+reader-writer lock and RCU as a reference counting system---it is useful
+to reflect on the scale of the thing being protected.
+The reader-writer
+lock analogy looks at larger multi-part objects such as a linked list
+and shows how RCU can facilitate concurrency while elements are added
+to, and removed from, the list.
+The reference-count analogy looks at
+the individual objects and looks at how they can be accessed safely
+within whatever whole they are a part of.
+
+
+\subsection{Full list of RCU APIs}
+\label{sec:rcu:Full list of RCU APIs}
+
+The RCU APIs are documented in docbook-format header comments in the
+Linux-kernel source code, but it helps to have a full list of the
+APIs, since there does not appear to be a way to categorize them
+in docbook.  Here is the list, by category.
+
+\begin{itemize}
+\item RCU list traversal:
+
+\begin{VerbatimU}[samepage=false]
+	list_entry_rcu
+	list_entry_lockless
+	list_first_entry_rcu
+	list_next_rcu
+	list_for_each_entry_rcu
+	list_for_each_entry_continue_rcu
+	list_for_each_entry_from_rcu
+	list_first_or_null_rcu
+	list_next_or_null_rcu
+	hlist_first_rcu
+	hlist_next_rcu
+	hlist_pprev_rcu
+	hlist_for_each_entry_rcu
+	hlist_for_each_entry_rcu_bh
+	hlist_for_each_entry_from_rcu
+	hlist_for_each_entry_continue_rcu
+	hlist_for_each_entry_continue_rcu_bh
+	hlist_nulls_first_rcu
+	hlist_nulls_for_each_entry_rcu
+	hlist_bl_first_rcu
+	hlist_bl_for_each_entry_rcu
+\end{VerbatimU}
+
+\item RCU pointer/list update:
+
+\begin{VerbatimU}[samepage=false]
+	rcu_assign_pointer
+	list_add_rcu
+	list_add_tail_rcu
+	list_del_rcu
+	list_replace_rcu
+	hlist_add_behind_rcu
+	hlist_add_before_rcu
+	hlist_add_head_rcu
+	hlist_add_tail_rcu
+	hlist_del_rcu
+	hlist_del_init_rcu
+	hlist_replace_rcu
+	list_splice_init_rcu
+	list_splice_tail_init_rcu
+	hlist_nulls_del_init_rcu
+	hlist_nulls_del_rcu
+	hlist_nulls_add_head_rcu
+	hlist_bl_add_head_rcu
+	hlist_bl_del_init_rcu
+	hlist_bl_del_rcu
+	hlist_bl_set_first_rcu
+\end{VerbatimU}
+
+\item RCU\@:
+
+\begin{VerbatimU}[tabsize=1]
+	Critical sections       Grace period            Barrier
+
+	rcu_read_lock           synchronize_net         rcu_barrier
+	rcu_read_unlock         synchronize_rcu
+	rcu_dereference         synchronize_rcu_expedited
+	rcu_read_lock_held      call_rcu
+	rcu_dereference_check   kfree_rcu
+	rcu_dereference_protected
+\end{VerbatimU}
+
+\item bh:
+
+\begin{VerbatimU}[tabsize=1]
+	Critical sections       Grace period            Barrier
+
+	rcu_read_lock_bh        call_rcu                rcu_barrier
+	rcu_read_unlock_bh      synchronize_rcu
+	[local_bh_disable]      synchronize_rcu_expedited
+	[and friends]
+	rcu_dereference_bh
+	rcu_dereference_bh_check
+	rcu_dereference_bh_protected
+	rcu_read_lock_bh_held
+\end{VerbatimU}
+
+\item sched:
+
+\begin{VerbatimU}[tabsize=1]
+	Critical sections       Grace period             Barrier
+
+	rcu_read_lock_sched     call_rcu                 rcu_barrier
+	rcu_read_unlock_sched   synchronize_rcu
+	[preempt_disable]       synchronize_rcu_expedited
+	[and friends]
+	rcu_read_lock_sched_notrace
+	rcu_read_unlock_sched_notrace
+	rcu_dereference_sched
+	rcu_dereference_sched_check
+	rcu_dereference_sched_protected
+	rcu_read_lock_sched_held
+\end{VerbatimU}
+
+\item RCU-Tasks:
+
+\begin{VerbatimU}[tabsize=1]
+	Critical sections       Grace period             Barrier
+
+	N/A                     call_rcu_tasks           rcu_barrier_tasks
+	                        synchronize_rcu_tasks
+\end{VerbatimU}
+
+\item RCU-Tasks-Rude:
+
+\begin{VerbatimU}[tabsize=1]
+	Critical sections       Grace period            Barrier
+
+	N/A                                             N/A
+	                        synchronize_rcu_tasks_rude
+\end{VerbatimU}
+
+\item RCU-Tasks-Trace:
+
+\begin{VerbatimU}[tabsize=1,gobble=1]
+	Critical sections      Grace period          Barrier
+
+	rcu_read_lock_trace    call_rcu_tasks_trace  rcu_barrier_tasks_trace
+	rcu_read_unlock_trace  synchronize_rcu_tasks_trace
+\end{VerbatimU}
+
+\item SRCU\@:
+
+\begin{VerbatimU}[tabsize=1]
+	Critical sections       Grace period            Barrier
+
+	srcu_read_lock          call_srcu               srcu_barrier
+	srcu_read_unlock        synchronize_srcu
+	srcu_dereference        synchronize_srcu_expedited
+	srcu_dereference_check
+	srcu_read_lock_held
+\end{VerbatimU}
+
+\item SRCU\@: Initialization/cleanup:
+
+\begin{VerbatimU}
+	DEFINE_SRCU
+	DEFINE_STATIC_SRCU
+	init_srcu_struct
+	cleanup_srcu_struct
+\end{VerbatimU}
+
+\item All: lockdep-checked RCU utility APIs:
+
+\begin{VerbatimU}
+	RCU_LOCKDEP_WARN
+	rcu_sleep_check
+\end{VerbatimU}
+
+\item All: Unchecked RCU-protected pointer access:
+
+\begin{VerbatimU}
+	rcu_dereference_raw
+\end{VerbatimU}
+
+\item All: Unchecked RCU-protected pointer access with dereferencing prohibited:
+
+\begin{VerbatimU}
+	rcu_access_pointer
+\end{VerbatimU}
+\end{itemize}
+
+See the comment headers in the source code (or the docbook generated
+from them) for more information.
+
+However, given that there are no fewer than four families of RCU APIs
+in the Linux kernel, how do you choose which one to use?
+The following
+list can be helpful:
+
+\begin{enumerate}[(a)]
+\item	Will readers need to block?
+	If so, you need SRCU\@.
+
+\item	Will readers need to block and are you doing tracing, for
+	example, ftrace or BPF\@?
+	If so, you need RCU-tasks,
+	RCU-tasks-rude, and/or RCU-tasks-trace.
+
+\item	What about the \co{-rt} patchset?
+	If readers would need to block in
+	an non\co{-rt} kernel, you need SRCU\@.
+	If readers would block when
+	acquiring spinlocks in a \co{-rt} kernel, but not in a non\co{-rt} kernel,
+	SRCU is not necessary.
+	(The \co{-rt} patchset turns spinlocks into
+	sleeplocks, hence this distinction.)
+
+\item	Do you need to treat NMI handlers, hardirq handlers,
+	and code segments with preemption disabled (whether
+	via \co{preempt_disable()}, \co{local_irq_save()}, \co{local_bh_disable()},
+	or some other mechanism) as if they were explicit RCU readers?
+	If so, RCU-sched readers are the only choice that will work
+	for you, but since about v4.20 you use can use the vanilla RCU
+	update primitives.
+
+\item	Do you need RCU grace periods to complete even in the face of
+	softirq monopolization of one or more of the CPUs?
+	For example,
+	is your code subject to network-based denial-of-service attacks?
+	If so, you should disable softirq across your readers, for
+	example, by using \co{rcu_read_lock_bh()}.
+	Since about v4.20 you
+	use can use the vanilla RCU update primitives.
+
+\item	Is your workload too update-intensive for normal use of
+	RCU, but inappropriate for other synchronization mechanisms?
+	If so, consider \co{SLAB_TYPESAFE_BY_RCU} (which was originally
+	named \co{SLAB_DESTROY_BY_RCU}).
+	But please be careful!
+
+\item	Do you need read-side critical sections that are respected even
+	on CPUs that are deep in the idle loop, during entry to or exit
+	from user-mode execution, or on an offlined CPU\@?
+	If so, SRCU
+	and RCU Tasks Trace are the only choices that will work for you,
+	with SRCU being strongly preferred in almost all cases.
+
+\item	Otherwise, use RCU\@.
+\end{enumerate}
+
+Of course, this all assumes that you have determined that RCU is in fact
+the right tool for your job.
+
+
+\subsection*{Acknowledgements}
+
+My thanks to the people who helped make this human-readable, including
+Jon Walpole, Josh Triplett, Serge Hallyn, Suzanne Wood, and Alan Stern.
+
+
+For more information, see \url{http://www.rdrop.com/users/paulmck/RCU}.
