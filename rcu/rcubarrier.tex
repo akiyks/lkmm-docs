@@ -31,7 +31,7 @@ The function \co{p_callback()} might be defined as follows:
 \end{VerbatimU}
 
 
-\subsection{Unloading Modules That Use \co{call_rcu()}}
+\subsection{Unloading Modules That Use \texttt{call\_rcu()}}
 \label{sec:rcu:Unloading Modules That Use call_rcu()}
 
 But what if the \co{p_callback()} function is defined in an unloadable module?
@@ -56,7 +56,7 @@ deferral is required in realtime kernels in order to avoid excessive
 scheduling latencies.
 
 
-\subsection{\co{rcu_barrier()}}
+\subsection{\texttt{rcu\_barrier()}}
 \label{sec:rcu:rcu_barrier()}
 
 This situation can be handled by the \co{rcu_barrier()} primitive.
@@ -222,7 +222,7 @@ If your module uses \co{call_rcu()}
 \co{rcu_barrier()} \emph{and} \co{srcu_barrier()}.
 
 
-\subsection{Implementing \co{rcu_barrier()}}
+\subsection{Implementing \texttt{rcu\_barrier()}}
 \label{sec:rcu:Implementing rcu_barrier()}
 
 Dipankar Sarma's implementation of \co{rcu_barrier()} makes use of the fact
@@ -413,7 +413,7 @@ However,
 the code above illustrates the concepts.
 
 
-\subsection{\co{rcu_barrier()} Summary}
+\subsection{\texttt{rcu\_barrier()} Summary}
 \label{sec:rcu:rcu_barrier() Summary}
 
 The \co{rcu_barrier()} primitive is used relatively infrequently, since most

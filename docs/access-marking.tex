@@ -73,7 +73,7 @@ In fact, the following sections describe situations where use of
 \co{READ_ONCE()} and \co{WRITE_ONCE()}.
 
 
-\subsection{Use of the \co{data_race()} Macro}
+\subsection{Use of the \texttt{data\_race()} Macro}
 
 Here are some situations where \co{data_race()} should be used instead of
 \co{READ_ONCE()} and \co{WRITE_ONCE()}:
@@ -236,7 +236,7 @@ because doing otherwise prevents KCSAN from detecting violations of your
 code's synchronization rules.
 
 
-\subsection{Use of \co{__data_racy}}
+\subsection{Use of \texttt{\_\_data\_racy}}
 
 Adding the \co{__data_racy} type qualifier to the declaration of a variable
 causes KCSAN to treat all accesses to that variable as if they were

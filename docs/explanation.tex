@@ -336,7 +336,7 @@ The memory model requires certain of these relations to be orderings,
 that is, it requires them not to have any cycles.
 
 
-\subsection{The program order relation: \co{po} and \co{po-loc}}
+\subsection{The program order relation: \texttt{po} and \texttt{po-loc}}
 \label{sec:docs:explanation:The Program Order Relation: po and po-loc}
 
 The most important relation between events is program order (\co{po}).
@@ -452,7 +452,7 @@ between them.
 even interleave their object code.)
 
 
-\subsection{Dependency relations: \co{data}, \co{addr}, and \co{ctrl}}
+\subsection{Dependency relations: \texttt{data}, \texttt{addr}, and \texttt{ctrl}}
 \label{sec:docs:explanation:Dependency Relations: data, addr, and ctrl}
 
 We say that two events are linked by a dependency relation when the
@@ -591,7 +591,7 @@ model.
 Be warned.
 
 
-\subsection{The reads-from relation: \co{rf}, \co{rfi}, and \co{rfe}}
+\subsection{The reads-from relation: \texttt{rf}, \texttt{rfi}, and \texttt{rfe}}
 \label{sec:docs:explanation:The Reads-from Relation: rf, rfi, and rfe}
 
 The reads-from relation (\co{rf}) links a write event to a read event when
@@ -668,7 +668,7 @@ It requires all accesses to be properly aligned and of the location's
 actual size.
 
 
-\subsection{Cache coherence and the coherence order relation: \co{co}, \co{coi}, and \co{coe}}
+\subsection{Cache coherence and the coherence order relation: \texttt{co}, \texttt{coi}, and \texttt{coe}}
 \label{sec:docs:explanation:Cache Coherence and The Coherence Order Relation}
 
 Cache coherence is a general principle requiring that in a
@@ -813,7 +813,7 @@ Coherence order is strictly per-location, or if you prefer, each
 location has its own independent coherence order.
 
 
-\subsection{The from-reads relation: \co{fr}, \co{fri}, and \co{fre}}
+\subsection{The from-reads relation: \texttt{fr}, \texttt{fri}, and \texttt{fre}}
 \label{sec:docs:explanation:The From-reads Relation: fr, fri, and fre}
 
 The from-reads relation (\co{fr}) can be a little difficult for people to
@@ -982,7 +982,7 @@ the fence (i.e., those which precede the fence in program order).
 fences have other properties which we discuss later.
 
 
-\subsection{Propagation order relation: \co{cumul-fence}}
+\subsection{Propagation order relation: \texttt{cumul-fence}}
 \label{sec:docs:explanation:Propagation Order Releation: cumul-fence}
 
 The fences which affect propagation order (i.e., strong, release, and
@@ -1092,7 +1092,7 @@ true:
 This LKMM axiom implies that the four coherency rules are obeyed.
 
 
-\subsection{Atomic updates: \co{rmw}}
+\subsection{Atomic updates: \texttt{rmw}}
 \label{sec:docs:explanation:Atomic Updates: rmw}
 
 What does it mean to say that a read-modify-write (rmw) update, such
@@ -1180,7 +1180,7 @@ updates with full-barrier semantics did not always guarantee ordering
 at least as strong as atomic updates with release-barrier semantics.)
 
 
-\subsection{The preserved program order relation: \co{ppo}}
+\subsection{The preserved program order relation: \texttt{ppo}}
 \label{sec:docs:explanation:The Preserved Program Order Relation: ppo}
 
 There are many situations where a CPU is obliged to execute two
@@ -1425,7 +1425,7 @@ And of course, none of this matters for any architecture other than
 Alpha.
 
 
-\subsection{The happens-before relation: \co{hb}}
+\subsection{The happens-before relation: \texttt{hb}}
 \label{sec:docs:explanation:The Happens-before Relation: hb}
 
 The happens-before relation (\co{hb}) links memory accesses that have to
@@ -1643,7 +1643,7 @@ It relies on the particular properties of strong fences, which we
 cover in the next section.
 
 
-\subsection{The propagates-before relation: \co{pb}}
+\subsection{The propagates-before relation: \texttt{pb}}
 \label{sec:docs:explanation:The Propagates-before Relation: pb}
 
 The propagates-before (\co{pb}) relation capitalizes on the special
@@ -1739,7 +1739,7 @@ they execute means that it cannot have cycles.
 This requirement is the content of the LKMM's ``propagation'' axiom.
 
 
-\subsection{RCU relations: \co{rcu-link}, \co{rcu-gp}, \co{rcu-rscsi}, \co{rcu-order}, \co{rcu-fence}, and \co{rb}}
+\subsection{RCU relations: \texttt{rcu-link}, \texttt{rcu-gp}, \texttt{rcu-rscsi}, \texttt{rcu-order}, \texttt{rcu-fence}, and \texttt{rb}}
 \label{sec:docs:explanation:RCU Relations: rcu-link, rcu-gp, rcu-rscsi, rcu-order, rcu-fence, and rb}
 
 RCU (Read-Copy-Update) is a powerful synchronization mechanism.
