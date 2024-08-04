@@ -292,7 +292,7 @@ then waits (if needed) for the completion.
 	the corresponding grace period elapsed, all before CPU~1's
 	\co{rcu_barrier_func()} started executing.
 	This would result in
-	\co{rcu_barrier_cpu_count} being decremented to zero, so that \clnref{}'s % line 11
+	\co{rcu_barrier_cpu_count} being decremented to zero, so that \clnref{wait}'s % line 11
 	\co{wait_for_completion()} would return immediately, failing to
 	wait for CPU~1's callbacks to be invoked.
 
