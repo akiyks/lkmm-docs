@@ -1,0 +1,145 @@
+% .. _NMI_rcu_doc:
+
+\section{Using RCU to Protect Dynamic NMI Handlers}
+
+
+Although RCU is usually used to protect read-mostly data structures,
+it is possible to use RCU to provide dynamic non-maskable interrupt
+handlers, as well as dynamic irq handlers.
+This document describes
+how to do this, drawing loosely from Zwane Mwaikambo's NMI-timer
+work in an old version of \path{arch/x86/kernel/traps.c}.
+
+The relevant pieces of code are listed below, each followed by a
+brief explanation:
+
+\begin{VerbatimU}
+	static int dummy_nmi_callback(struct pt_regs *regs, int cpu)
+	{
+		return 0;
+	}
+\end{VerbatimU}
+
+The \co{dummy_nmi_callback()} function is a ``dummy'' NMI handler that does
+nothing, but returns zero, thus saying that it did nothing, allowing
+the NMI handler to take the default machine-specific action:
+
+\begin{VerbatimU}
+	static nmi_callback_t nmi_callback = dummy_nmi_callback;
+\end{VerbatimU}
+
+This \co{nmi_callback} variable is a global function pointer to the current
+NMI handler:
+
+\begin{VerbatimU}
+	void do_nmi(struct pt_regs * regs, long error_code)
+	{
+		int cpu;
+
+		nmi_enter();
+
+		cpu = smp_processor_id();
+		++nmi_count(cpu);
+
+		if (!rcu_dereference_sched(nmi_callback)(regs, cpu))
+			default_do_nmi(regs);
+
+		nmi_exit();
+	}
+\end{VerbatimU}
+
+The \co{do_nmi()} function processes each NMI\@.
+It first disables preemption
+in the same way that a hardware irq would, then increments the per-CPU
+count of NMIs.
+It then invokes the NMI handler stored in the \co{nmi_callback}
+function pointer.
+If this handler returns zero, \co{do_nmi()} invokes the
+\co{default_do_nmi()} function to handle a machine-specific NMI\@.
+Finally,
+preemption is restored.
+
+In theory, \co{rcu_dereference_sched()} is not needed, since this code runs
+only on i386, which in theory does not need \co{rcu_dereference_sched()}
+anyway.
+However, in practice it is a good documentation aid, particularly
+for anyone attempting to do something similar on Alpha or on systems
+with aggressive optimizing compilers.
+
+\QuickQuiz{
+	Why might the \co{rcu_dereference_sched()} be necessary on Alpha,
+	given that the code referenced by the pointer is read-only?
+}\QuickQuizAnswer{
+	The caller to \co{set_nmi_callback()} might well have
+	initialized some data that is to be used by the new NMI
+	handler.
+	In this case, the \co{rcu_dereference_sched()} would
+	be needed, because otherwise a CPU that received an NMI
+	just after the new handler was set might see the pointer
+	to the new NMI handler, but the old pre-initialized
+	version of the handler's data.
+
+	This same sad story can happen on other CPUs when using
+	a compiler with aggressive pointer-value speculation
+	optimizations.
+	(But please don't!)
+
+	More important, the \co{rcu_dereference_sched()} makes it
+	clear to someone reading the code that the pointer is
+	being protected by RCU-sched.
+}\QuickQuizEnd
+
+Back to the discussion of NMI and RCU\@:
+
+\begin{VerbatimU}
+	void set_nmi_callback(nmi_callback_t callback)
+	{
+		rcu_assign_pointer(nmi_callback, callback);
+	}
+\end{VerbatimU}
+
+The \co{set_nmi_callback()} function registers an NMI handler.
+Note that any
+data that is to be used by the callback must be initialized up \emph{before}
+the call to \co{set_nmi_callback()}.
+On architectures that do not order
+writes, the \co{rcu_assign_pointer()} ensures that the NMI handler sees the
+initialized values:
+
+\begin{VerbatimU}
+	void unset_nmi_callback(void)
+	{
+		rcu_assign_pointer(nmi_callback, dummy_nmi_callback);
+	}
+\end{VerbatimU}
+
+This function unregisters an NMI handler, restoring the original
+\co{dummy_nmi_handler()}.
+However, there may well be an NMI handler
+currently executing on some other CPU\@.
+We therefore cannot free
+up any data structures used by the old NMI handler until execution
+of it completes on all other CPUs.
+
+One way to accomplish this is via \co{synchronize_rcu()}, perhaps as
+follows:
+
+\begin{VerbatimU}
+	unset_nmi_callback();
+	synchronize_rcu();
+	kfree(my_nmi_data);
+\end{VerbatimU}
+
+This works because (as of v4.20) \co{synchronize_rcu()} blocks until all
+CPUs complete any preemption-disabled segments of code that they were
+executing.
+Since NMI handlers disable preemption, \co{synchronize_rcu()} is guaranteed
+not to return until all ongoing NMI handlers exit.
+It is therefore safe
+to free up the handler's data as soon as \co{synchronize_rcu()} returns.
+
+\begin{Note}
+  Important note{:} for this to work, the architecture in question must
+  invoke \co{nmi_enter()} and \co{nmi_exit()} on NMI entry and exit,
+  respectively.
+\end{Note}
