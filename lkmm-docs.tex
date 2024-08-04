@@ -67,7 +67,7 @@
 \SetWatermarkLightness{.6}
 \SetWatermarkHorCenter{.85\paperwidth}
 \SetWatermarkVerCenter{.95\paperheight}
-%\SetWatermarkText{\texttt{\commitid}}
+\SetWatermarkText{\texttt{\commitid}}
 \usepackage[breakable,skins]{tcolorbox}
 \usepackage{tikzsymbols} % for emoticons
 \usepackage[split,makeindex]{splitidx}
@@ -94,7 +94,7 @@
 \setboolean{noqqz}{false}
 \newcommand{\IfNoQqz}[2]{\ifthenelse{\boolean{noqqz}}{#1}{#2}}
 
-%\input{autodate} % need to input here to reflect tag state
+\input{autodate} % need to input here to reflect tag state
 \usepackage{qqz}
 
 % custom booleans
@@ -479,9 +479,9 @@
 
 \frontmatter
 
-%\IfEbookSize{\hypersetup{pageanchor=false}}{}
-%\maketitle
-%\IfEbookSize{\hypersetup{pageanchor=true}}{}
+\IfEbookSize{\hypersetup{pageanchor=false}}{}
+\maketitle
+\IfEbookSize{\hypersetup{pageanchor=true}}{}
 
 \raggedbottom
 
