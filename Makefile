@@ -43,3 +43,4 @@ lkmm-docs.pdf: qqz.tex
 
 clean:
 	latexmk -C
+	rm -f $(LATEXGENERATED)
