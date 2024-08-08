@@ -106,7 +106,8 @@ exactly zero overhead in Linux kernels built for production use with
 This guarantee allows ordering to be enforced with extremely low
 overhead to readers, for example:
 
-\begin{VerbatimN}
+\begin{fcvlabel}[ln:rcu:desing:req1]
+\begin{VerbatimN}[commandchars=\%\@\$]
 	int x, y;
 
 	void thread0(void)
@@ -120,12 +121,14 @@ overhead to readers, for example:
 	void thread1(void)
 	{
 		WRITE_ONCE(x, 1);
-		synchronize_rcu();
+		synchronize_rcu(); %lnlbl@sync$
 		WRITE_ONCE(y, 1);
 	}
 \end{VerbatimN}
+\end{fcvlabel}
 
-Because the \co{synchronize_rcu()} on \clnref{} % line 14
+\begin{fcvref}[ln:rcu:desing:req1]
+Because the \co{synchronize_rcu()} on \clnref{sync} % line 14
 waits for all pre-existing
 readers, any instance of \co{thread0()} that loads a value of zero
 from~\co{x} must complete before \co{thread1()} stores to~\co{y}, so that
@@ -134,6 +137,7 @@ Similarly, any
 instance of \co{thread0()} that loads a value of one from~\co{y} must have
 started after the \co{synchronize_rcu()} started, and must therefore also
 load a value of one from~\co{x}.
+\end{fcvref}
 Therefore, the outcome:
 
 \begin{VerbatimU}
@@ -161,38 +165,40 @@ This scenario resembles one of the first uses of RCU in
 distributed lock manager's transition into a state suitable for handling
 recovery from node failure, more or less as follows:
 
-\begin{VerbatimN}
-       1 #define STATE_NORMAL        0
-       2 #define STATE_WANT_RECOVERY 1
-       3 #define STATE_RECOVERING    2
-       4 #define STATE_WANT_NORMAL   3
-       5
-       6 int state = STATE_NORMAL;
-       7
-       8 void do_something_dlm(void)
-       9 {
-      10   int state_snap;
-      11
-      12   rcu_read_lock();
-      13   state_snap = READ_ONCE(state);
-      14   if (state_snap == STATE_NORMAL)
-      15     do_something();
-      16   else
-      17     do_something_carefully();
-      18   rcu_read_unlock();
-      19 }
-      20
-      21 void start_recovery(void)
-      22 {
-      23   WRITE_ONCE(state, STATE_WANT_RECOVERY);
-      24   synchronize_rcu();
-      25   WRITE_ONCE(state, STATE_RECOVERING);
-      26   recovery();
-      27   WRITE_ONCE(state, STATE_WANT_NORMAL);
-      28   synchronize_rcu();
-      29   WRITE_ONCE(state, STATE_NORMAL);
-      30 }
+\begin{fcvlabel}[ln:rcu:design:req2]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	#define STATE_NORMAL        0
+	#define STATE_WANT_RECOVERY 1
+	#define STATE_RECOVERING    2
+	#define STATE_WANT_NORMAL   3
+
+	int state = STATE_NORMAL;
+
+	void do_something_dlm(void)
+	{
+		int state_snap;
+
+		rcu_read_lock();
+		state_snap = READ_ONCE(state);
+		if (state_snap == STATE_NORMAL)
+			do_something();
+		else
+			do_something_carefully();
+		rcu_read_unlock();
+	}
+
+	void start_recovery(void)
+	{
+		WRITE_ONCE(state, STATE_WANT_RECOVERY);
+		synchronize_rcu();
+		WRITE_ONCE(state, STATE_RECOVERING);
+		recovery();
+		WRITE_ONCE(state, STATE_WANT_NORMAL);
+		synchronize_rcu();   %lnlbl@sync2$
+		WRITE_ONCE(state, STATE_NORMAL);
+	}
 \end{VerbatimN}
+\end{fcvlabel}
 
 The RCU read-side critical section in \co{do_something_dlm()} works with
 the \co{synchronize_rcu()} in \co{start_recovery()} to guarantee that
@@ -200,8 +206,10 @@ the \co{synchronize_rcu()} in \co{start_recovery()} to guarantee that
 little or no synchronization overhead in \co{do_something_dlm()}.
 
 \QuickQuiz{
-  Why is the \co{synchronize_rcu()} on \clnref{} %line 28
+\begin{fcvref}[ln:rcu:design:req2]
+  Why is the \co{synchronize_rcu()} on \clnref{sync2} %line 28
   needed?
+\end{fcvref}
 }\QuickQuizAnswer{
   Without that extra grace period, memory reordering could result in
   \co{do_something_dlm()} executing \co{do_something()} concurrently with
@@ -226,49 +234,53 @@ locklessly picking up the \co{gp} pointer, and, if the value loaded is
 non-\co{NULL}, locklessly accessing the \co{->a} and \co{->b} fields.
 
 \begin{VerbatimN}
-       1 bool add_gp_buggy(int a, int b)
-       2 {
-       3   p = kmalloc(sizeof(*p), GFP_KERNEL);
-       4   if (!p)
-       5     return -ENOMEM;
-       6   spin_lock(&gp_lock);
-       7   if (rcu_access_pointer(gp)) {
-       8     spin_unlock(&gp_lock);
-       9     return false;
-      10   }
-      11   p->a = a;
-      12   p->b = a;
-      13   gp = p; /* ORDERING BUG */
-      14   spin_unlock(&gp_lock);
-      15   return true;
-      16 }
+	bool add_gp_buggy(int a, int b)
+	{
+		p = kmalloc(sizeof(*p), GFP_KERNEL);
+		if (!p)
+			return -ENOMEM;
+		spin_lock(&gp_lock);
+                if (rcu_access_pointer(gp)) {
+			spin_unlock(&gp_lock);
+			return false;
+		}
+		p->a = a;
+		p->b = a;
+		gp = p; /* ORDERING BUG */
+		spin_unlock(&gp_lock);
+		return true;
+	}
 \end{VerbatimN}
 
 The problem is that both the compiler and weakly ordered CPUs are within
 their rights to reorder this code as follows:
 
-\begin{VerbatimN}
-       1 bool add_gp_buggy_optimized(int a, int b)
-       2 {
-       3   p = kmalloc(sizeof(*p), GFP_KERNEL);
-       4   if (!p)
-       5     return -ENOMEM;
-       6   spin_lock(&gp_lock);
-       7   if (rcu_access_pointer(gp)) {
-       8     spin_unlock(&gp_lock);
-       9     return false;
-      10   }
-      11   gp = p; /* ORDERING BUG */
-      12   p->a = a;
-      13   p->b = a;
-      14   spin_unlock(&gp_lock);
-      15   return true;
-      16 }
+\begin{fcvlabel}[ln:rcu:design:req3]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	bool add_gp_buggy_optimized(int a, int b)
+	{
+		p = kmalloc(sizeof(*p), GFP_KERNEL);
+		if (!p)
+			return -ENOMEM;
+		spin_lock(&gp_lock);
+		if (rcu_access_pointer(gp)) {
+			spin_unlock(&gp_lock);
+			return false;
+		}
+		gp = p; /* ORDERING BUG */ %lnlbl@bug$
+		p->a = a;
+		p->b = a;
+		spin_unlock(&gp_lock);
+		return true;
+	}
 \end{VerbatimN}
+\end{fcvlabel}
 
+\begin{fcvref}[ln:rcu:design:req3]
 If an RCU reader fetches \co{gp} just after \co{add_gp_buggy_optimized}
-executes \clnref{}, % line 11
+executes \clnref{bug}, % line 11
 it will see garbage in the \co{->a} and \co{->b} fields.
+\end{fcvref}
 And this is but one of many ways in which compiler and hardware
 optimizations could cause trouble.
 Therefore, we clearly need some way
@@ -286,31 +298,35 @@ The updater uses
 The following
 shows an example of insertion:
 
-\begin{VerbatimN}
-       1 bool add_gp(int a, int b)
-       2 {
-       3   p = kmalloc(sizeof(*p), GFP_KERNEL);
-       4   if (!p)
-       5     return -ENOMEM;
-       6   spin_lock(&gp_lock);
-       7   if (rcu_access_pointer(gp)) {
-       8     spin_unlock(&gp_lock);
-       9     return false;
-      10   }
-      11   p->a = a;
-      12   p->b = a;
-      13   rcu_assign_pointer(gp, p);
-      14   spin_unlock(&gp_lock);
-      15   return true;
-      16 }
+\begin{fcvlabel}[ln:rcu:design:rcu4]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	bool add_gp(int a, int b)
+	{
+		p = kmalloc(sizeof(*p), GFP_KERNEL);
+		if (!p)
+			return -ENOMEM;
+		spin_lock(&gp_lock);
+		if (rcu_access_pointer(gp)) {
+			spin_unlock(&gp_lock);
+			return false;
+		}
+		p->a = a;                   %lnlbl@a$
+		p->b = a;                   %lnlbl@b$
+		rcu_assign_pointer(gp, p);  %lnlbl@assign$
+		spin_unlock(&gp_lock);
+		return true;
+	}
 \end{VerbatimN}
+\end{fcvlabel}
 
-The \co{rcu_assign_pointer()} on \clnref{} % line 13
+\begin{fcvref}[ln:rcu:design:rcu4]
+The \co{rcu_assign_pointer()} on \clnref{assign} % line 13
 is conceptually equivalent to a
 simple assignment statement, but also guarantees that its assignment
-will happen after the two assignments in \clnref{,}, %lines 11 and 12
+will happen after the two assignments in \clnref{a,b}, %lines 11 and 12
 similar to the
 C11 \co{memory_order_release} store operation.
+\end{fcvref}
 It also prevents any
 number of ``interesting'' compiler optimizations, for example, the use of
 \co{gp} as a scratch location immediately preceding the assignment.
@@ -333,18 +349,18 @@ control its accesses to the RCU-protected data, as shown in
 \co{do_something_gp_buggy()} below:
 
 \begin{VerbatimN}
-       1 bool do_something_gp_buggy(void)
-       2 {
-       3   rcu_read_lock();
-       4   p = gp;  /* OPTIMIZATIONS GALORE!!! */
-       5   if (p) {
-       6     do_something(p->a, p->b);
-       7     rcu_read_unlock();
-       8     return true;
-       9   }
-      10   rcu_read_unlock();
-      11   return false;
-      12 }
+	bool do_something_gp_buggy(void)
+	{
+		rcu_read_lock();
+		p = gp;  /* OPTIMIZATIONS GALORE!!! */
+		if (p) {
+			do_something(p->a, p->b);
+			rcu_read_unlock();
+			return true;
+		}
+		rcu_read_unlock();
+		return false;
+	}
 \end{VerbatimN}
 
 However, this temptation must be resisted because there are a
@@ -355,17 +371,17 @@ the compiler were short of registers, it might choose to refetch from
 \co{gp} rather than keeping a separate copy in~\co{p} as follows:
 
 \begin{VerbatimN}
-       1 bool do_something_gp_buggy_optimized(void)
-       2 {
-       3   rcu_read_lock();
-       4   if (gp) { /* OPTIMIZATIONS GALORE!!! */
-       5     do_something(gp->a, gp->b);
-       6     rcu_read_unlock();
-       7     return true;
-       8   }
-       9   rcu_read_unlock();
-      10   return false;
-      11 }
+	bool do_something_gp_buggy_optimized(void)
+	{
+		rcu_read_lock();
+		if (gp) { /* OPTIMIZATIONS GALORE!!! */
+			do_something(gp->a, gp->b);
+			rcu_read_unlock();
+			return true;
+		}
+		rcu_read_unlock();
+		return false;
+	}
 \end{VerbatimN}
 
 If this function ran concurrently with a series of updates that replaced
@@ -375,20 +391,22 @@ cause serious confusion.
 To prevent this (and much else besides),
 \co{do_something_gp()} uses \co{rcu_dereference()} to fetch from \co{gp}:
 
-\begin{VerbatimN}
-       1 bool do_something_gp(void)
-       2 {
-       3   rcu_read_lock();
-       4   p = rcu_dereference(gp);
-       5   if (p) {
-       6     do_something(p->a, p->b);
-       7     rcu_read_unlock();
-       8     return true;
-       9   }
-      10   rcu_read_unlock();
-      11   return false;
-      12 }
+\begin{fcvlabel}[ln:rcu:design:req5]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	bool do_something_gp(void)
+	{
+		rcu_read_lock();
+		p = rcu_dereference(gp);
+		if (p) {
+			do_something(p->a, p->b);
+			rcu_read_unlock();    %lnlbl@unlock$
+			return true;
+		}
+		rcu_read_unlock();
+		return false;
+	}
 \end{VerbatimN}
+\end{fcvlabel}
 
 The \co{rcu_dereference()} uses volatile casts and (for DEC Alpha) memory
 barriers in the Linux kernel.
@@ -423,35 +441,43 @@ data structures, for example, using the following process:
 
 This process is implemented by \co{remove_gp_synchronous()}:
 
-\begin{VerbatimN}
-       1 bool remove_gp_synchronous(void)
-       2 {
-       3   struct foo *p;
-       4
-       5   spin_lock(&gp_lock);
-       6   p = rcu_access_pointer(gp);
-       7   if (!p) {
-       8     spin_unlock(&gp_lock);
-       9     return false;
-      10   }
-      11   rcu_assign_pointer(gp, NULL);
-      12   spin_unlock(&gp_lock);
-      13   synchronize_rcu();
-      14   kfree(p);
-      15   return true;
-      16 }
-\end{VerbatimN}
+\begin{fcvlabel}[ln:rcu:design:req6]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	bool remove_gp_synchronous(void)
+	{
+		struct foo *p;
 
-This function is straightforward, with \clnref{} % line13
+		spin_lock(&gp_lock);
+		p = rcu_access_pointer(gp);  %lnlbl@access$
+		if (!p) {
+			spin_unlock(&gp_lock);
+			return false;
+		}
+		rcu_assign_pointer(gp, NULL);  %lnlbl@null$
+		spin_unlock(&gp_lock);
+		synchronize_rcu();    %lnlbl@sync$
+		kfree(p);             %lnlbl@kfree$
+		return true;
+	}
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:rcu:design:req6]
+This function is straightforward, with \clnref{sync} % line13
 waiting for a grace
-period before \clnref % line 14
+period before \clnref{kfree} % line 14
 frees the old data element.
+\end{fcvref}
+\begin{fcvref}[ln:rcu:design:req5]
 This waiting ensures
-that readers will reach \clnref{} % line 7
+that readers will reach \clnref{unlock} % line 7
 of \co{do_something_gp()} before the data
 element referenced by~\co{p} is freed.
-The \co{rcu_access_pointer()} on \clnref{} % line 6
+\end{fcvref}
+\begin{fcvref}[ln:rcu:design:req6]
+The \co{rcu_access_pointer()} on \clnref{access} % line 6
 is similar to \co{rcu_dereference()}, except that:
+\end{fcvref}
 
 \begin{enumerate}
 \item The value returned by \co{rcu_access_pointer()} cannot be
@@ -530,6 +556,7 @@ The previous section's simple linked-data-structure scenario clearly
 demonstrates the need for RCU's stringent memory-ordering guarantees on
 systems with more than one CPU\@:
 
+\begin{fcvref}[ln:rcu:design:req6]
 \begin{enumerate}
 \item Each CPU that has an RCU read-side critical section that begins
    before \co{synchronize_rcu()} starts is guaranteed to execute a full
@@ -538,7 +565,7 @@ systems with more than one CPU\@:
    Without
    this guarantee, a pre-existing RCU read-side critical section might
    hold a reference to the newly removed \co{struct foo} after the
-   \co{kfree()} on \clnref{} % line 14
+   \co{kfree()} on \clnref{kfree} % line 14
    of \co{remove_gp_synchronous()}.
 \item Each CPU that has an RCU read-side critical section that ends after
    \co{synchronize_rcu()} returns is guaranteed to execute a full memory
@@ -546,27 +573,28 @@ systems with more than one CPU\@:
    time that the RCU read-side critical section begins.
    Without this
    guarantee, a later RCU read-side critical section running after the
-   \co{kfree()} on \clnref{} % line 14
+   \co{kfree()} on \clnref{kfree} % line 14
    of \co{remove_gp_synchronous()} might later run
    \co{do_something_gp()} and find the newly deleted \co{struct foo}.
 \item If the task invoking \co{synchronize_rcu()} remains on a given CPU,
    then that CPU is guaranteed to execute a full memory barrier sometime
    during the execution of \co{synchronize_rcu()}.
    This guarantee ensures
-   that the \co{kfree()} on \clnref{} % line 14
+   that the \co{kfree()} on \clnref{kfree} % line 14
    of \co{remove_gp_synchronous()} really
-   does execute after the removal on \clnref{}. % line 11
+   does execute after the removal on \clnref{null}. % line 11
 \item If the task invoking \co{synchronize_rcu()} migrates among a group of
    CPUs during that invocation, then each of the CPUs in that group is
    guaranteed to execute a full memory barrier sometime during the
    execution of \co{synchronize_rcu()}.
    This guarantee also ensures that
-   the \co{kfree()} on \clnref{} % line 14
+   the \co{kfree()} on \clnref{kfree} % line 14
    of \co{remove_gp_synchronous()} really does
-   execute after the removal on \clnref{}, % line 11
+   execute after the removal on \clnref{null}, % line 11
    but also in the case where the
    thread executing the \co{synchronize_rcu()} migrates in the meantime.
 \end{enumerate}
+\end{fcvref}
 
 \QuickQuiz{
   Given that multiple CPUs can start RCU read-side critical sections at
@@ -765,25 +793,25 @@ To see this, consider the following pair of
 threads:
 
 \begin{VerbatimN}
-       1 void thread0(void)
-       2 {
-       3   rcu_read_lock();
-       4   WRITE_ONCE(x, 1);
-       5   rcu_read_unlock();
-       6   rcu_read_lock();
-       7   WRITE_ONCE(y, 1);
-       8   rcu_read_unlock();
-       9 }
-      10
-      11 void thread1(void)
-      12 {
-      13   rcu_read_lock();
-      14   r1 = READ_ONCE(y);
-      15   rcu_read_unlock();
-      16   rcu_read_lock();
-      17   r2 = READ_ONCE(x);
-      18   rcu_read_unlock();
-      19 }
+	void thread0(void)
+	{
+		rcu_read_lock();
+		WRITE_ONCE(x, 1);
+		rcu_read_unlock();
+		rcu_read_lock();
+		WRITE_ONCE(y, 1);
+		rcu_read_unlock();
+	}
+
+	void thread1(void)
+	{
+		rcu_read_lock();
+		r1 = READ_ONCE(y);
+		rcu_read_unlock();
+		rcu_read_lock();
+		r2 = READ_ONCE(x);
+		rcu_read_unlock();
+	}
 \end{VerbatimN}
 
 After \co{thread0()} and \co{thread1()} execute concurrently, it is quite
@@ -818,25 +846,25 @@ All they do is to prevent grace periods from ending. The following
 example illustrates this:
 
 \begin{VerbatimN}
-       1 void thread0(void)
-       2 {
-       3   rcu_read_lock();
-       4   r1 = READ_ONCE(y);
-       5   if (r1) {
-       6     do_something_with_nonzero_x();
-       7     r2 = READ_ONCE(x);
-       8     WARN_ON(!r2); /* BUG!!! */
-       9   }
-      10   rcu_read_unlock();
-      11 }
-      12
-      13 void thread1(void)
-      14 {
-      15   spin_lock(&my_lock);
-      16   WRITE_ONCE(x, 1);
-      17   WRITE_ONCE(y, 1);
-      18   spin_unlock(&my_lock);
-      19 }
+	void thread0(void)
+	{
+		rcu_read_lock();
+		r1 = READ_ONCE(y);
+		if (r1) {
+			do_something_with_nonzero_x();
+			r2 = READ_ONCE(x);
+			WARN_ON(!r2); /* BUG!!! */
+		}
+		rcu_read_unlock();
+	}
+
+	void thread1(void)
+	{
+		spin_lock(&my_lock);
+		WRITE_ONCE(x, 1);
+		WRITE_ONCE(y, 1);
+		spin_unlock(&my_lock);
+	}
 \end{VerbatimN}
 
 If the \co{thread0()} function's \co{rcu_read_lock()} excluded the
@@ -885,28 +913,28 @@ situation can be illustrated as follows, where \co{x}, \co{y}, and~\co{z}
 are initially all zero:
 
 \begin{VerbatimN}
-       1 void thread0(void)
-       2 {
-       3   rcu_read_lock();
-       4   WRITE_ONCE(a, 1);
-       5   WRITE_ONCE(b, 1);
-       6   rcu_read_unlock();
-       7 }
-       8
-       9 void thread1(void)
-      10 {
-      11   r1 = READ_ONCE(a);
-      12   synchronize_rcu();
-      13   WRITE_ONCE(c, 1);
-      14 }
-      15
-      16 void thread2(void)
-      17 {
-      18   rcu_read_lock();
-      19   r2 = READ_ONCE(b);
-      20   r3 = READ_ONCE(c);
-      21   rcu_read_unlock();
-      22 }
+	void thread0(void)
+	{
+		rcu_read_lock();
+		WRITE_ONCE(a, 1);
+		WRITE_ONCE(b, 1);
+		rcu_read_unlock();
+	}
+
+	void thread1(void)
+	{
+		r1 = READ_ONCE(a);
+		synchronize_rcu();
+		WRITE_ONCE(c, 1);
+	}
+
+	void thread2(void)
+	{
+		rcu_read_lock();
+		r2 = READ_ONCE(b);
+		r3 = READ_ONCE(c);
+		rcu_read_unlock();
+	}
 \end{VerbatimN}
 
 It turns out that the outcome:
@@ -932,35 +960,35 @@ manner, it is necessary to use two grace periods, where the first grace
 period is known to end before the second grace period starts:
 
 \begin{VerbatimN}
-       1 void thread0(void)
-       2 {
-       3   rcu_read_lock();
-       4   WRITE_ONCE(a, 1);
-       5   WRITE_ONCE(b, 1);
-       6   rcu_read_unlock();
-       7 }
-       8
-       9 void thread1(void)
-      10 {
-      11   r1 = READ_ONCE(a);
-      12   synchronize_rcu();
-      13   WRITE_ONCE(c, 1);
-      14 }
-      15
-      16 void thread2(void)
-      17 {
-      18   r2 = READ_ONCE(c);
-      19   synchronize_rcu();
-      20   WRITE_ONCE(d, 1);
-      21 }
-      22
-      23 void thread3(void)
-      24 {
-      25   rcu_read_lock();
-      26   r3 = READ_ONCE(b);
-      27   r4 = READ_ONCE(d);
-      28   rcu_read_unlock();
-      29 }
+	void thread0(void)
+	{
+		rcu_read_lock();
+		WRITE_ONCE(a, 1);
+		WRITE_ONCE(b, 1);
+		rcu_read_unlock();
+	}
+
+	void thread1(void)
+	{
+		r1 = READ_ONCE(a);
+		synchronize_rcu();
+		WRITE_ONCE(c, 1);
+	}
+
+	void thread2(void)
+	{
+		r2 = READ_ONCE(c);
+		synchronize_rcu();
+		WRITE_ONCE(d, 1);
+	}
+
+	void thread3(void)
+	{
+		rcu_read_lock();
+		r3 = READ_ONCE(b);
+		r4 = READ_ONCE(d);
+		rcu_read_unlock();
+	}
 \end{VerbatimN}
 
 Here, if \co{(r1 == 1)}, then \co{thread0()}'s write to~\co{b} must happen
@@ -996,43 +1024,43 @@ However, this temptation leads nowhere good, as can be
 illustrated by the following, with all variables initially zero:
 
 \begin{VerbatimN}
-       1 void thread0(void)
-       2 {
-       3   rcu_read_lock();
-       4   WRITE_ONCE(a, 1);
-       5   WRITE_ONCE(b, 1);
-       6   rcu_read_unlock();
-       7 }
-       8
-       9 void thread1(void)
-      10 {
-      11   r1 = READ_ONCE(a);
-      12   synchronize_rcu();
-      13   WRITE_ONCE(c, 1);
-      14 }
-      15
-      16 void thread2(void)
-      17 {
-      18   rcu_read_lock();
-      19   WRITE_ONCE(d, 1);
-      20   r2 = READ_ONCE(c);
-      21   rcu_read_unlock();
-      22 }
-      23
-      24 void thread3(void)
-      25 {
-      26   r3 = READ_ONCE(d);
-      27   synchronize_rcu();
-      28   WRITE_ONCE(e, 1);
-      29 }
-      30
-      31 void thread4(void)
-      32 {
-      33   rcu_read_lock();
-      34   r4 = READ_ONCE(b);
-      35   r5 = READ_ONCE(e);
-      36   rcu_read_unlock();
-      37 }
+	void thread0(void)
+	{
+		rcu_read_lock();
+		WRITE_ONCE(a, 1);
+		WRITE_ONCE(b, 1);
+		rcu_read_unlock();
+	}
+
+	void thread1(void)
+	{
+		r1 = READ_ONCE(a);
+		synchronize_rcu();
+		WRITE_ONCE(c, 1);
+	}
+
+	void thread2(void)
+	{
+		rcu_read_lock();
+		WRITE_ONCE(d, 1);
+		r2 = READ_ONCE(c);
+		rcu_read_unlock();
+	}
+
+	void thread3(void)
+	{
+		r3 = READ_ONCE(d);
+		synchronize_rcu();
+		WRITE_ONCE(e, 1);
+	}
+
+	void thread4(void)
+	{
+		rcu_read_lock();
+		r4 = READ_ONCE(b);
+		r5 = READ_ONCE(e);
+		rcu_read_unlock();
+	}
 \end{VerbatimN}
 
 In this case, the outcome:
@@ -1380,41 +1408,44 @@ unacceptable.
 In these situations, the \co{asynchronous call_rcu()} can
 be used in place of \co{synchronize_rcu()} as follows:
 
-\begin{VerbatimN}
-       1 struct foo {
-       2   int a;
-       3   int b;
-       4   struct rcu_head rh;
-       5 };
-       6
-       7 static void remove_gp_cb(struct rcu_head *rhp)
-       8 {
-       9   struct foo *p = container_of(rhp, struct foo, rh);
-      10
-      11   kfree(p);
-      12 }
-      13
-      14 bool remove_gp_asynchronous(void)
-      15 {
-      16   struct foo *p;
-      17
-      18   spin_lock(&gp_lock);
-      19   p = rcu_access_pointer(gp);
-      20   if (!p) {
-      21     spin_unlock(&gp_lock);
-      22     return false;
-      23   }
-      24   rcu_assign_pointer(gp, NULL);
-      25   call_rcu(&p->rh, remove_gp_cb);
-      26   spin_unlock(&gp_lock);
-      27   return true;
-      28 }
-\end{VerbatimN}
+\begin{fcvlabel}[ln:rcu:design:req7]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	struct foo {          %lnlbl@foo:b$
+		int a;
+		int b;
+		struct rcu_head rh;
+	};                    %lnlbl@foo:e$
 
+	static void remove_gp_cb(struct rcu_head *rhp)
+	{
+		struct foo *p = container_of(rhp, struct foo, rh);
+
+		kfree(p);
+	}
+
+	bool remove_gp_asynchronous(void)
+	{
+		struct foo *p;
+
+		spin_lock(&gp_lock);            %lnlbl@lock$
+		p = rcu_access_pointer(gp);     %lnlbl@access$
+		if (!p) {
+			spin_unlock(&gp_lock);
+			return false;
+		}
+		rcu_assign_pointer(gp, NULL);
+		call_rcu(&p->rh, remove_gp_cb);  %lnlbl@call$
+		spin_unlock(&gp_lock);           %lnlbl@unlock$
+		return true;
+	}
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:rcu:design:req7]
 A definition of \co{struct foo} is finally needed, and appears on
-\clnrefrange{}{}. % lines 1-5
+\clnrefrange{foo:b}{foo:e}. % lines 1-5
 The function \co{remove_gp_cb()} is passed to \co{call_rcu()}
-on \clnref{}, % line 25
+on \clnref{call}, % line 25
 and will be invoked after the end of a subsequent grace
 period.
 This gets the same effect as \co{remove_gp_synchronous()}, but
@@ -1436,24 +1467,29 @@ userspace, it is bad practice to write an RCU callback function that
 takes too long.
 Long-running operations should be relegated to separate
 threads or (in the Linux kernel) workqueues.
+\end{fcvref}
 
 \QuickQuiz{
-  Why does \clnref{} % line 19
+\begin{fcvref}[ln:rcu:design:req7]
+  Why does \clnref{access} % line 19
   use \co{rcu_access_pointer()}? After all,
-  \co{call_rcu()} on \clnref{} % line 25
+  \co{call_rcu()} on \clnref{call} % line 25
   stores into the structure, which would
   interact badly with concurrent insertions.
   Doesn't this mean that
   \co{rcu_dereference()} is required?
+\end{fcvref}
 }\QuickQuizAnswer{
-  Presumably the \co{->gp_lock} acquired on \clnref{} % line 18
+\begin{fcvref}[ln:rcu:design:req7]
+  Presumably the \co{->gp_lock} acquired on \clnref{lock} % line 18
   excludes any
   changes, including any insertions that \co{rcu_dereference()} would
   protect against.
   Therefore, any insertions will be delayed until
-  after \co{->gp_lock} is released on \clnref{}, % line 25
+  after \co{->gp_lock} is released on \clnref{unlock}, % line 26
   which in turn means that
   \co{rcu_access_pointer()} suffices.
+\end{fcvref}
 }\QuickQuizEnd
 
 However, all that \co{remove_gp_cb()} is doing is invoking \co{kfree()} on
@@ -1463,27 +1499,27 @@ This is a common idiom, and is supported by
 below:
 
 \begin{VerbatimN}
-       1 struct foo {
-       2   int a;
-       3   int b;
-       4   struct rcu_head rh;
-       5 };
-       6
-       7 bool remove_gp_faf(void)
-       8 {
-       9   struct foo *p;
-      10
-      11   spin_lock(&gp_lock);
-      12   p = rcu_dereference(gp);
-      13   if (!p) {
-      14     spin_unlock(&gp_lock);
-      15     return false;
-      16   }
-      17   rcu_assign_pointer(gp, NULL);
-      18   kfree_rcu(p, rh);
-      19   spin_unlock(&gp_lock);
-      20   return true;
-      21 }
+	struct foo {
+		int a;
+		int b;
+		struct rcu_head rh;
+	};
+
+	bool remove_gp_faf(void)
+	{
+		struct foo *p;
+
+		spin_lock(&gp_lock);
+		p = rcu_dereference(gp);
+		if (!p) {
+			spin_unlock(&gp_lock);
+			return false;
+		}
+		rcu_assign_pointer(gp, NULL);
+		kfree_rcu(p, rh);
+		spin_unlock(&gp_lock);
+		return true;
+	}
 \end{VerbatimN}
 
 Note that \co{remove_gp_faf()} simply invokes \co{kfree_rcu()} and
@@ -1523,35 +1559,39 @@ be carried out in the meantime? The polling-style
 \co{get_state_synchronize_rcu()} and \co{cond_synchronize_rcu()} functions
 may be used for this purpose, as shown below:
 
-\begin{VerbatimN}
-       1 bool remove_gp_poll(void)
-       2 {
-       3   struct foo *p;
-       4   unsigned long s;
-       5
-       6   spin_lock(&gp_lock);
-       7   p = rcu_access_pointer(gp);
-       8   if (!p) {
-       9     spin_unlock(&gp_lock);
-      10     return false;
-      11   }
-      12   rcu_assign_pointer(gp, NULL);
-      13   spin_unlock(&gp_lock);
-      14   s = get_state_synchronize_rcu();
-      15   do_something_while_waiting();
-      16   cond_synchronize_rcu(s);
-      17   kfree(p);
-      18   return true;
-      19 }
-\end{VerbatimN}
+\begin{fcvlabel}[ln:rcu:design:req8]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	bool remove_gp_poll(void)
+	{
+		struct foo *p;
+		unsigned long s;
 
-On \clnref{}, % line 14
+		spin_lock(&gp_lock);
+		p = rcu_access_pointer(gp);
+		if (!p) {
+			spin_unlock(&gp_lock);
+			return false;
+		}
+		rcu_assign_pointer(gp, NULL);
+		spin_unlock(&gp_lock);
+		s = get_state_synchronize_rcu();  %lnlbl@getstate$
+		do_something_while_waiting();     %lnlbl@do$
+		cond_synchronize_rcu(s);          %lnlbl@condsync$
+		kfree(p);
+		return true;
+	}
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:rcu:design:req8]
+On \clnref{getstate}, % line 14
 \co{get_state_synchronize_rcu()} obtains a ``cookie'' from RCU,
-then \clnref{} % line 15
-carries out other tasks, and finally, \clnref{} % line 16
+then \clnref{do} % line 15
+carries out other tasks, and finally, \clnref{condsync} % line 16
 returns
 immediately if a grace period has elapsed in the meantime, but otherwise
 waits as required.
+\end{fcvref}
 The need for \co{get_state_synchronize_rcu} and
 \co{cond_synchronize_rcu()} has appeared quite recently, so it is too
 early to tell whether they will stand the test of time.
@@ -2282,36 +2322,40 @@ reorder a \co{get_user()} invocation into an RCU read-side critical section.
 For example, suppose that the source code looked like this:
 
 \begin{VerbatimN}
-       1 rcu_read_lock();
-       2 p = rcu_dereference(gp);
-       3 v = p->value;
-       4 rcu_read_unlock();
-       5 get_user(user_v, user_p);
-       6 do_something_with(v, user_v);
+	rcu_read_lock();
+	p = rcu_dereference(gp);
+	v = p->value;
+	rcu_read_unlock();
+	get_user(user_v, user_p);
+	do_something_with(v, user_v);
 \end{VerbatimN}
 
 The compiler must not be permitted to transform this source code into
 the following:
 
-\begin{VerbatimN}
-       1 rcu_read_lock();
-       2 p = rcu_dereference(gp);
-       3 get_user(user_v, user_p); // BUG: POSSIBLE PAGE FAULT!!!
-       4 v = p->value;
-       5 rcu_read_unlock();
-       6 do_something_with(v, user_v);
+\begin{fcvlabel}[ln:rcu:design:req9]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	rcu_read_lock();
+	p = rcu_dereference(gp);
+	get_user(user_v, user_p); // BUG: POSSIBLE PAGE FAULT!!!
+	v = p->value;     %lnlbl@uaf$
+	rcu_read_unlock();
+	do_something_with(v, user_v);
 \end{VerbatimN}
+\end{fcvlabel}
 
 If the compiler did make this transformation in a \co{CONFIG_PREEMPTION=n} kernel
 build, and if \co{get_user()} did page fault, the result would be a quiescent
 state in the middle of an RCU read-side critical section.
+\begin{fcvref}[ln:rcu:design:req9]
 This misplaced
-quiescent state could result in \clnref{} % line 4
+quiescent state could result in \clnref{uaf} % line 4
 being a use-after-free access,
 which could be bad for your kernel's actuarial statistics.
 Similar examples
 can be constructed with the call to \co{get_user()} preceding the
 \co{rcu_read_lock()}.
+\end{fcvref}
 
 Unfortunately, \co{get_user()} doesn't have any particular ordering properties,
 and in some architectures the underlying \co{asm} isn't even marked
@@ -2817,11 +2861,11 @@ pass a ``cookie'' from \co{srcu_read_lock()} to \co{srcu_read_unlock()}, for
 example, as follows:
 
 \begin{VerbatimN}
-       1 int idx;
-       2
-       3 idx = srcu_read_lock(&ss);
-       4 do_something();
-       5 srcu_read_unlock(&ss, idx);
+	int idx;
+
+	idx = srcu_read_lock(&ss);
+	do_something();
+	srcu_read_unlock(&ss, idx);
 \end{VerbatimN}
 
 As noted above, it is legal to block within SRCU read-side critical
@@ -2835,20 +2879,23 @@ section can wait, either directly or indirectly, for that domain's grace
 period to elapse.
 For example, this results in a self-deadlock:
 
-\begin{VerbatimN}
-       1 int idx;
-       2
-       3 idx = srcu_read_lock(&ss);
-       4 do_something();
-       5 synchronize_srcu(&ss);
-       6 srcu_read_unlock(&ss, idx);
-\end{VerbatimN}
+\begin{fcvlabel}[ln:rcu:design:req10]
+\begin{VerbatimN}[commandchars=\%\@\$]
+	int idx;
 
-However, if \clnref{} % line 5
+	idx = srcu_read_lock(&ss);
+	do_something();
+	synchronize_srcu(&ss);     %lnlbl@syncsrcu$
+	srcu_read_unlock(&ss, idx);
+\end{VerbatimN}
+\end{fcvlabel}
+
+\begin{fcvref}[ln:rcu:design:req10]
+However, if \clnref{syncsrcu} % line 5
 acquired a mutex that was held across a
 \co{synchronize_srcu()} for domain \co{ss}, deadlock would still be
 possible.
-Furthermore, if \clnref{} % line 5
+Furthermore, if \clnref{syncsrcu} % line 5
 acquired a mutex that was held across a
 \co{synchronize_srcu()} for some other domain \co{ss1}, and if an
 \co{ss1}-domain SRCU read-side critical section acquired another mutex
@@ -2858,6 +2905,7 @@ Such a deadlock cycle could extend across an
 arbitrarily large number of different SRCU domains.
 Again, with great
 power comes great responsibility.
+\end{fcvref}
 
 Unlike the other RCU flavors, SRCU read-side critical sections can run
 on idle and even offline CPUs.
