@@ -2412,37 +2412,31 @@ execution, and the idle loop.
 Depending on kernel configuration, RCU
 handles these states differently:
 
-\begin{VerbatimU}
-+-------------+------------------+------------------+-----------------+
-| HZ Kconfig  | In-Kernel        | Usermode         | Idle            |
-+=============+==================+==================+=================+
-| HZ_PERIODIC | Can rely on      | Can rely on      | Can rely on     |
-|             | scheduling-clock | scheduling-clock | RCU's           |
-|             | interrupt.       | interrupt and    | dyntick-idle    |
-|             |                  | its detection    | detection.      |
-|             |                  | of interrupt     |                 |
-|             |                  | from usermode.   |                 |
-+-------------+------------------+------------------+-----------------+
-| NO_HZ_IDLE  | Can rely on      | Can rely on      | Can rely on     |
-|             | scheduling-clock | scheduling-clock | RCU's           |
-|             | interrupt.       | interrupt and    | dyntick-idle    |
-|             |                  | its detection    | detection.      |
-|             |                  | of interrupt     |                 |
-|             |                  | from usermode.   |                 |
-+-------------+------------------+------------------+-----------------+
-| NO_HZ_FULL  | Can only         | Can rely on      | Can rely on     |
-|             | sometimes rely   | RCU's            | RCU's           |
-|             | on               | dyntick-idle     | dyntick-idle    |
-|             | scheduling-clock | detection.       | detection.      |
-|             | interrupt. In    |                  |                 |
-|             | other cases, it  |                  |                 |
-|             | is necessary to  |                  |                 |
-|             | bound kernel     |                  |                 |
-|             | execution times  |                  |                 |
-|             | and/or use       |                  |                 |
-|             | IPIs.            |                  |                 |
-+-------------+------------------+------------------+-----------------+
-\end{VerbatimU}
+{\vspace{2ex}\noindent
+\renewcommand*{\arraystretch}{1.1}\centering\footnotesize
+\rowcolors{1}{}{lightgray}
+\begin{tabularx}{\columnwidth}{@{}l>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}\toprule
+  \tco{HZ Kconfig}  & In-Kernel & Usermode & Idle \\ \midrule
+  \tco{HZ_PERIODIC} &
+    Can rely on scheduling-clock interrupt. &
+      Can rely on scheduling-clock interrupt and its detection of interrupt
+      from usermode. &
+        Can rely on RCU's dyntick-idle detection. \\
+  \tco{NO_HZ_IDLE} &
+    Can rely on scheduling-clock interrupt. &
+      Can rely on scheduling-clock interrupt and its detection of interrupt
+      from usermode. &
+        Can rely on RCU's dyntick-idle detection. \\
+  \tco{NO_HZ_FULL} &
+    Can only sometimes rely on scheduling-clock interrupt.
+    In other cases, it is necessary to bound kernel execution times and/or
+    use IPIs. &
+      Can rely on RCU's dyntick-idle detection. &
+        Can rely on RCU's dyntick-idle detection. \\
+  \bottomrule
+\end{tabularx}
+}\vspace{2ex}
+
 
 \QuickQuiz{
   Why can't \co{NO_HZ_FULL} in-kernel execution rely on the
@@ -3067,7 +3061,7 @@ workloads that don't want their \co{nohz_full} CPUs receiving IPIs and
 by battery-powered systems that don't want their idle CPUs to be awakened.
 
 Once kernel entry/exit and deep-idle functions have been properly tagged
-\co{noinstr}`, Tasks RCU can start paying attention to idle tasks (except
+\co{noinstr}, Tasks RCU can start paying attention to idle tasks (except
 those that are idle from RCU's perspective) and then Tasks Rude RCU can
 be removed from the kernel.
 
