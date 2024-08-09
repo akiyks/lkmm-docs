@@ -240,7 +240,7 @@ non-\co{NULL}, locklessly accessing the \co{->a} and \co{->b} fields.
 		if (!p)
 			return -ENOMEM;
 		spin_lock(&gp_lock);
-                if (rcu_access_pointer(gp)) {
+		if (rcu_access_pointer(gp)) {
 			spin_unlock(&gp_lock);
 			return false;
 		}
@@ -385,7 +385,7 @@ the compiler were short of registers, it might choose to refetch from
 \end{VerbatimN}
 
 If this function ran concurrently with a series of updates that replaced
-the current structure with a new one, the fetches of \co{gp->a}n and
+the current structure with a new one, the fetches of \co{gp->a} and
 \co{gp->b} might well come from two different structures, which could
 cause serious confusion.
 To prevent this (and much else besides),
