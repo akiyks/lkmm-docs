@@ -13,7 +13,7 @@ LATEXSOURCES = \
 	pfhyphex.tex \
 	ushyphex.tex
 
-LATEXGENERATED = autodate.tex qqz.tex
+LATEXGENERATED = autodate.tex qqz.tex lkmm-docs_flat.tex
 
 SVGSOURCES_ALL := $(wildcard rcu/*/*.svg)
 SVG_EMERGENCY := $(wildcard rcu/*/*.svg*.svg)
