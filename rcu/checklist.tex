@@ -184,7 +184,9 @@ over a rather long period of time, but improvements are always welcome!
 		However,
 		with a bit of devious creativity, it is possible to
 		mishandle the return value from \co{rcu_dereference()}.
-		Please see \path{rcu_dereference.rst} for more information.
+		Please see
+		\cref{sec:rcu:Proper care and feeding of return values from rcu_dereference()}
+		for more information.
 
 		The \co{rcu_dereference()} primitive is used by the
 		various \qtco{_rcu()} list-traversal primitives, such
@@ -198,7 +200,7 @@ over a rather long period of time, but improvements are always welcome!
 		However, lockdep
 		will complain if you access \co{rcu_dereference()} outside
 		of an RCU read-side critical section.
-		See \path{lockdep.rst}
+		See \cref{sec:rcu:RCU and lockdep checking}
 		to learn what to do about this.
 
 		Of course, neither \co{rcu_dereference()} nor the \qtco{_rcu()}
@@ -422,7 +424,8 @@ over a rather long period of time, but improvements are always welcome!
 	can be quite helpful in reducing code bloat when common code is
 	shared between readers and updaters.
 	Additional primitives
-	are provided for this case, as discussed in \path{lockdep.rst}.
+	are provided for this case, as discussed in
+	\cref{sec:rcu:RCU and lockdep checking}.
 
 	One exception to this rule is when data is only ever added to
 	the linked data structure, and is never removed during any
@@ -645,5 +648,5 @@ over a rather long period of time, but improvements are always welcome!
 	If necessary, you can use something like workqueues to execute
 	the requisite pair of functions concurrently.
 
-	See \path{rcubarrier.rst} for more information.
+	See \cref{sec:rcu:RCU and Unloadable Modules} for more information.
 \end{enumerate}

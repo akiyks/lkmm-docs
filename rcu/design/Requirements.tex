@@ -420,7 +420,7 @@ outermost RCU read-side critical section containing that
 \co{rcu_dereference()}, unless protection of the corresponding data
 element has been passed from RCU to some other synchronization
 mechanism, most commonly locking or reference counting
-(see \path{../../rcuref.rst}).
+(see \cref{sec:rcu:Reference-count design for elements of lists/arrays protected by RCU}).
 
 In short, updaters use \co{rcu_assign_pointer()} and readers use
 \co{rcu_dereference()}, and these two RCU API elements work together to

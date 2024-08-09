@@ -394,7 +394,7 @@ Memory barriers come in four basic varieties:
      the semantics of which are now implicit in all marked accesses.
      For more up-to-date information, including how compiler transformations
      can sometimes break address dependencies, see
-     \path{Documentation/RCU/rcu_dereference.rst}.
+     \cref{sec:rcu:Proper care and feeding of return values from rcu_dereference()}.
      \end{Note}
 
      An address-dependency barrier is a weaker form of read barrier.
@@ -582,7 +582,7 @@ It covers the long-obsolete \co{smp_read_barrier_depends()} macro, the
 semantics of which are now implicit in all marked accesses.
 For more up-to-date information, including how compiler transformations
 can sometimes break address dependencies, see
-\path{Documentation/RCU/rcu_dereference.rst}.
+\cref{sec:rcu:Proper care and feeding of return values from rcu_dereference()}.
 \end{Note}
 
 As of v4.15 of the Linux kernel, an \co{smp_mb()} was added to
@@ -675,8 +675,8 @@ An address-dependency barrier is not required to order dependent writes
 because the CPUs that the Linux kernel supports don't do writes until they
 are certain (1) that the write will actually happen, (2) of the location of
 the write, and (3) of the value to be written.
-But please carefully read \cref{sec:Control dependencies} and the
-\path{Documentation/RCU/rcu_dereference.rst} file:
+But please carefully read \cref{sec:Control dependencies} and
+\cref{sec:rcu:Proper care and feeding of return values from rcu_dereference()}:
 The compiler can and does break dependencies in a great many highly
 creative ways.
 

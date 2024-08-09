@@ -1,5 +1,5 @@
 \section{What is RCU?---``Read, Copy, Update''}
-\label{sec:rcu:What is RCU? Read, Copy, Update}
+\label{sec:rcu:What is RCU?}
 
 \begin{Note}
   Introductory lists and paragraphs in Linux kernel documentation are
@@ -322,7 +322,7 @@ at the function header comments.
 		by the caller.
 		If the indicated protection is not provided,
 		a lockdep splat is emitted.
-		See \path{Design/Requirements/Requirements.rst}
+		See \cref{sec:rcu:A Tour Through RCU's Requirements}
 		and the API's code comments for more details and example usage.}
 	For example, the following is \emph{not} legal:
 
@@ -447,7 +447,9 @@ their assorted primitives.
 This section shows a simple use of the core RCU API to protect a
 global pointer to a dynamically allocated structure.
 More-typical
-uses of RCU may be found in \path{listRCU.rst} and \path{NMI-RCU.rst}.
+uses of RCU may be found in
+\cref{sec:rcu:Using RCU to Protect Read-Mostly Linked Lists,%
+sec:rcu:Using RCU to Protect Dynamic NMI Handlers}.
 
 \begin{VerbatimU}[samepage=false,breaklines=true]
 	struct foo {
@@ -535,8 +537,9 @@ So, to sum up:
 
 See \cref{sec:rcu:Review checklist for RCU patches}
 for additional rules to follow when using RCU\@.
-And again, more-typical uses of RCU may be found in \path{listRCU.rst}
-and \path{NMI-RCU.rst}.
+And again, more-typical uses of RCU may be found in
+\cref{sec:rcu:Using RCU to Protect Read-Mostly Linked Lists,%
+sec:rcu:Using RCU to Protect Dynamic NMI Handlers}.
 
 
 \subsection{What if my updating thread cannot block?}
@@ -653,7 +656,8 @@ be used, omitting the \co{rcu_head} structure from \co{struct foo}.
 This variant almost never blocks, but might do so by invoking
 \co{synchronize_rcu()} in response to memory-allocation failure.
 
-Again, see checklist.rst for additional rules governing the use of RCU\@.
+Again, see \cref{sec:rcu:Review checklist for RCU patches}
+for additional rules governing the use of RCU\@.
 
 
 \subsection{What are some simple implementations of RCU?}
@@ -757,11 +761,8 @@ to have completed---there is no way that \co{synchronize_rcu()} would have
 been able to write-acquire the lock otherwise.
 The \co{smp_mb__after_spinlock()}
 promotes \co{synchronize_rcu()} to a full memory barrier in compliance with
-the ``Memory-Barrier Guarantees'' listed in:
-
-\begin{quote}
-	\path{Design/Requirements/Requirements.rst}
-\end{quote}
+the ``Memory-Barrier Guarantees'' listed in
+\cref{sec:rcu:A Tour Through RCU's Requirements}.
 
 It is possible to nest \co{rcu_read_lock()}, since reader-writer locks may
 be recursively acquired.
