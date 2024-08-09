@@ -3,6 +3,7 @@ WHICH = command -v
 SED ?= sed
 
 LATEXSOURCES = \
+	lkmm-docs.tex \
 	docs/*.tex \
 	lkmm-README.tex \
 	rcu/*.tex \

@@ -10,7 +10,7 @@ since dropped their references.
 For example, an RCU-protected deletion
 from a linked list would first remove the item from the list, wait for
 a grace period to elapse, then free the element.
-See \path{listRCU.rst} for more
+See \cref{sec:rcu:Using RCU to Protect Read-Mostly Linked Lists} for more
 information on using RCU with linked lists.
 
 \subsection{Frequently asked questions}
@@ -56,7 +56,7 @@ information on using RCU with linked lists.
 \item If I am running on a uniprocessor kernel, which can only do one
   thing at a time, why should I wait for a grace period?
 
-  See \path{UP.rst} for more information.
+  See \cref{sec:rcu:RCU on Uniprocessor Systems} for more information.
 
 \item How can I see where RCU is currently used in the Linux kernel?
 
@@ -76,7 +76,8 @@ information on using RCU with linked lists.
 \item Why the name ``RCU\@''?
 
   ``RCU'' stands for ``read-copy update''.
-  \path{listRCU.rst} has more information on where this name came from, search
+  \Cref{sec:rcu:Using RCU to Protect Read-Mostly Linked Lists}
+  has more information on where this name came from, search
   for ``read-copy update'' to find it.
 
 \item I hear that RCU is patented?
