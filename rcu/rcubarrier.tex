@@ -361,12 +361,12 @@ The \co{rcu_barrier_callback()} function simply atomically decrements the
 \co{rcu_barrier_cpu_count} variable and finalizes the completion when it
 reaches zero, as follows:
 
-\begin{VerbatimN}
-  1  static void rcu_barrier_callback(struct rcu_head *notused)
-  2  {
-  3    if (atomic_dec_and_test(&rcu_barrier_cpu_count))
-  4      complete(&rcu_barrier_completion);
-  5  }
+\begin{VerbatimN}[]
+	static void rcu_barrier_callback(struct rcu_head *notused)
+	{
+		if (atomic_dec_and_test(&rcu_barrier_cpu_count))
+			complete(&rcu_barrier_completion);
+	}
 \end{VerbatimN}
 
 \QuickQuiz{
