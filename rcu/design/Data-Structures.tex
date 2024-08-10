@@ -609,7 +609,7 @@ The \co{rcu_node} array is sized via a series of C-preprocessor
 expressions as follows:
 
 \begin{fcvlabel}[ln:rcu:design:data1]
-\begin{VerbatimN}[breaklines=true,commandchars=\%\@\$]
+\begin{VerbatimN}[breaklines=true,xleftmargin=1pt,xrightmargin=0pt,commandchars=\%\@\$]
 	#ifdef CONFIG_RCU_FANOUT
 	#define RCU_FANOUT CONFIG_RCU_FANOUT
 	#else

@@ -87,9 +87,9 @@ For example, if it uses \co{call_rcu()}, \co{call_srcu()} on \co{srcu_struct_1},
 will be required when unloading:
 
 \begin{VerbatimN}
-  rcu_barrier();
-  srcu_barrier(&srcu_struct_1);
-  srcu_barrier(&srcu_struct_2);
+	rcu_barrier();
+	srcu_barrier(&srcu_struct_1);
+	srcu_barrier(&srcu_struct_2);
 \end{VerbatimN}
 
 If latency is of the essence, workqueues could be used to run these
