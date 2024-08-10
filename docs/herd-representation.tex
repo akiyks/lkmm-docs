@@ -30,9 +30,11 @@
 # By convention, a blank line in a cell means "same as the preceding line".
 \end{VerbatimU}
 
+\newcommand{\Dark}{\rowcolor{lightgray}}
+
 {\footnotesize
 \centering
-\renewcommand*{\arraystretch}{1.1}
+%\renewcommand*{\arraystretch}{1.1}
 %\rowcolors{7}{lightgray}{}
 %\ebresizewidth{
 \begin{longtable}{rl}\toprule
@@ -40,97 +42,97 @@
 	C macro  &  Events \\
 	\cmidrule(r){1-1} \cmidrule(l){2-2}
 	\endfirsthead
-        \multicolumn{2}{@{}l}{... continued} \\
+	\multicolumn{2}{@{}l}{... continued} \\
 	C macro  &  Events \\
 	\cmidrule(r){1-1} \cmidrule(l){2-2}
-        \endhead
-        \midrule
-        \multicolumn{2}{r@{}}{continued on next page ...} \\
-        \endfoot
-        \bottomrule
-        \endlastfoot
-	\tco{READ_ONCE}           & R[once] \\
-        \tco{atomic_read}         & \\
-        \tco{WRITE_ONCE}          & W[once] \\
+	\endhead
+	\midrule
+	\multicolumn{2}{r@{}}{continued on next page ...} \\
+	\endfoot
+	\bottomrule
+	\endlastfoot
+\Dark	\tco{READ_ONCE}           & R[once] \\
+\Dark	\tco{atomic_read}         & \\
+	\tco{WRITE_ONCE}          & W[once] \\
 	\tco{atomic_set}          & \\
-	\tco{smp_load_acquire}    & R[acquire] \\
-	\tco{atomic_read_acquire} & \\
+\Dark	\tco{smp_load_acquire}    & R[acquire] \\
+\Dark	\tco{atomic_read_acquire} & \\
 	\tco{smp_store_release}   & W[release] \\
 	\tco{atomic_set_release}  & \\
-	\tco{smp_store_mb}        & W[once] ->po F[mb] \\
+\Dark	\tco{smp_store_mb}        & W[once] ->po F[mb] \\
 	\tco{smp_mb}              & F[mb] \\
-	\tco{smp_rmb}             & F[rmb] \\
+\Dark	\tco{smp_rmb}             & F[rmb] \\
 	\tco{smp_wmb}             & F[wmb] \\
-	\tco{smp_mb__before_atomic} & F[before-atomic] \\
+\Dark	\tco{smp_mb__before_atomic} & F[before-atomic] \\
 	\tco{smp_mb__after_atomic} & F[after-atomic] \\
-	\tco{spin_unlock}         & UL \\
+\Dark	\tco{spin_unlock}         & UL \\
 	\tco{spin_is_locked}      & On seccess: RL \\
 	                          & On Failure: RU \\
-	\tco{smp_mb__after_spinlock} & F[after-spinlock] \\
+\Dark	\tco{smp_mb__after_spinlock} & F[after-spinlock] \\
 	\tco{smp_mb__after_unlock_lock} & F[after-unlock-lock] \\
-	\tco{rcu_read_lock}       & F[rcu-lock] \\
+\Dark	\tco{rcu_read_lock}       & F[rcu-lock] \\
 	\tco{rcu_read_unlock}     & F[rcu-unlock] \\
-	\tco{synchronize_rcu}     & F[sync-rcu] \\
-        \tco{rcu_dereference}     & R[once] \\
-	\tco{rcu_assign_pointer}  & W[release] \\
-        \tco{srcu_read_lock}      & R[srcu-lock] \\
-        \tco{srcu_down_read}      & \\
-	\tco{srcu_read_unlock}    & W[srcu-unlock] \\
-	\tco{srcu_up_read}        & \\
+\Dark	\tco{synchronize_rcu}     & F[sync-rcu] \\
+	\tco{rcu_dereference}     & R[once] \\
+\Dark	\tco{rcu_assign_pointer}  & W[release] \\
+	\tco{srcu_read_lock}      & R[srcu-lock] \\
+	\tco{srcu_down_read}      & \\
+\Dark	\tco{srcu_read_unlock}    & W[srcu-unlock] \\
+\Dark	\tco{srcu_up_read}        & \\
 	\tco{synchronize_srcu}    & SRCU[sync-srcu] \\
-	\tco{smp_mb__after_srcu_read_unlock} & F[after-srcu-read-unlock] \\
+\Dark	\tco{smp_mb__after_srcu_read_unlock} & F[after-srcu-read-unlock] \\
 	\midrule
 	\multicolumn{2}{@{}l}{RMW ops w/o return value} \\
 	C macro  &  Events \\
 	\cmidrule(r){1-1} \cmidrule(l){2-2}
-	\tco{atomic_add} & R*[noreturn] ->rmw W*[once] \\
-	\tco{atomic_and} & \\
+\Dark	\tco{atomic_add} & R*[noreturn] ->rmw W*[once] \\
+\Dark	\tco{atomic_and} & \\
 	\tco{spin_lock}  & LKR ->po LKW \\
-        \midrule
+	\midrule
 	\multicolumn{2}{@{}l}{RMW ops w/ return value} \\
 	C macro  &  Events \\
 	\cmidrule(r){1-1} \cmidrule(l){2-2}
-	\tco{atomic_add_return} & F[mb] ->po R*[once] ->rmw W*[once] \\
-	                        &               \hspace*{20pt} ->po F[mb] \\
-	\tco{atomic_fetch_add} & \\
-	\tco{atomic_fetch_and} & \\
-	\tco{atomic_xchg} & \\
-	\tco{xchg}        & \\
-        \tco{atomic_add_negative} & \\
+\Dark	\tco{atomic_add_return} & F[mb] ->po R*[once] ->rmw W*[once] \\
+\Dark	                        & \multicolumn{1}{r}{->po F[mb]}\\
+\Dark	\tco{atomic_fetch_add} & \\
+\Dark	\tco{atomic_fetch_and} & \\
+\Dark	\tco{atomic_xchg} & \\
+\Dark	\tco{xchg}        & \\
+\Dark	\tco{atomic_add_negative} & \\
 	\tco{atomic_add_return_relaxed} & R*[once] ->rmw W*[once] \\
 	\tco{atomic_fetch_add_relaxed} & \\
 	\tco{atomic_fetch_and_relaxed} & \\
 	\tco{atomic_xchg_relaxed} & \\
 	\tco{xchg_relaxed} & \\
 	\tco{atomic_add_negative_relaxed} & \\
-	\tco{atomic_add_return_acquire} & R*[acquire] ->rmw W*[once] \\
-	\tco{atomic_fetch_add_acquire} & \\
-	\tco{atomic_fetch_and_acquire} & \\
-	\tco{atomic_xchg_acquire} & \\
-	\tco{xchg_acquire} & \\
-	\tco{atomic_add_negative_acquire} & \\
+\Dark	\tco{atomic_add_return_acquire} & R*[acquire] ->rmw W*[once] \\
+\Dark	\tco{atomic_fetch_add_acquire} & \\
+\Dark	\tco{atomic_fetch_and_acquire} & \\
+\Dark	\tco{atomic_xchg_acquire} & \\
+\Dark	\tco{xchg_acquire} & \\
+\Dark	\tco{atomic_add_negative_acquire} & \\
 	\tco{atomic_add_return_release} & R*[once] ->rmw W*[release] \\
 	\tco{atomic_fetch_add_release} & \\
 	\tco{atomic_fetch_and_release} & \\
 	\tco{atomic_xchg_release} & \\
 	\tco{xchg_release} & \\
 	\tco{atomic_add_negative_release} & \\
-        \midrule
+	\midrule
 	\multicolumn{2}{@{}l}{Conditional RMW ops} \\
 	C macro  &  Events \\
 	\cmidrule(r){1-1} \cmidrule(l){2-2}
-	\tco{atomic_cmpxchg} & On success: F[mb] ->po R*[once]  \\
-	                     & \hspace*{30pt} ->rmw W*[once] ->po F[mb] \\
-	                     & On failure: R*[once] \\
-	\tco{cmpxchg} & \\
-        \tco{atomic_add_unless} & \\
+\Dark	\tco{atomic_cmpxchg} & On success: F[mb] ->po R*[once]  \\
+\Dark	                     & \multicolumn{1}{r}{->rmw W*[once] ->po F[mb]} \\
+\Dark                        & On failure: R*[once] \\
+\Dark	\tco{cmpxchg} & \\
+\Dark   \tco{atomic_add_unless} & \\
 	\tco{atomic_cmpxchg_relaxed} & On success: R*[once] ->rmw W*[once] \\
 	                             & On failure: R*[once] \\
-	\tco{atomic_cmpxchg_acquire} & On success: R*[acquire] ->rmw W*[once] \\
-                                     & On failure: R*[once] \\
+\Dark	\tco{atomic_cmpxchg_acquire} & On success: R*[acquire] ->rmw W*[once] \\
+\Dark	                             & On failure: R*[once] \\
 	\tco{atomic_cmpxchg_release} & On success: R*[once] ->rmw W*[release] \\
 	                             & On failure: R*[once] \\
-	\tco{spin_trylock}           & On success: LKR ->po LKW \\
-	                             & On failure: LF \\
+\Dark	\tco{spin_trylock}           & On success: LKR ->po LKW \\
+\Dark	                             & On failure: LF \\
 \end{longtable}
 }
