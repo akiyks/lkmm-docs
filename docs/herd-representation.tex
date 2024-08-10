@@ -4,7 +4,7 @@
 \begin{Note}
   Disclaimer.
   The tables include representations of \qco{add} and \qco{and} operations;
-  corresponding/identical representations of \qco{sub}, \qco{inc}, \qco{dec}
+  corresponding/identical representations of \qco{sub}, \qco{inc}, \qco{dec},
   \qco{or}, \qco{xor}, and \qco{andnot} operations are omitted.
 \end{Note}
 
@@ -30,16 +30,25 @@
 # By convention, a blank line in a cell means "same as the preceding line".
 \end{VerbatimU}
 
-\subsection{Non-RMW ops}
-
-{\small
+{\footnotesize
 \centering
 \renewcommand*{\arraystretch}{1.1}
 %\rowcolors{7}{lightgray}{}
 %\ebresizewidth{
-\begin{tabular}{rl}\toprule
+\begin{longtable}{rl}\toprule
+	\multicolumn{2}{@{}l}{Non-RMW ops} \\
 	C macro  &  Events \\
 	\cmidrule(r){1-1} \cmidrule(l){2-2}
+	\endfirsthead
+        \multicolumn{2}{@{}l}{... continued} \\
+	C macro  &  Events \\
+	\cmidrule(r){1-1} \cmidrule(l){2-2}
+        \endhead
+        \midrule
+        \multicolumn{2}{r@{}}{continued on next page ...} \\
+        \endfoot
+        \bottomrule
+        \endlastfoot
 	\tco{READ_ONCE}           & R[once] \\
         \tco{atomic_read}         & \\
         \tco{WRITE_ONCE}          & W[once] \\
@@ -70,40 +79,19 @@
 	\tco{srcu_up_read}        & \\
 	\tco{synchronize_srcu}    & SRCU[sync-srcu] \\
 	\tco{smp_mb__after_srcu_read_unlock} & F[after-srcu-read-unlock] \\
-	\bottomrule
-\end{tabular}
-%}
-}
-
-\subsection{RMW ops w/o return value}
-
-{\small
-\centering
-\renewcommand*{\arraystretch}{1.1}
-%\rowcolors{7}{lightgray}{}
-%\ebresizewidth{
-\begin{tabular}{rl}\toprule
+	\midrule
+	\multicolumn{2}{@{}l}{RMW ops w/o return value} \\
 	C macro  &  Events \\
 	\cmidrule(r){1-1} \cmidrule(l){2-2}
 	\tco{atomic_add} & R*[noreturn] ->rmw W*[once] \\
 	\tco{atomic_and} & \\
 	\tco{spin_lock}  & LKR ->po LKW \\
-	\bottomrule
-\end{tabular}
-%}
-}
-
-\subsection{RMW ops w/ return value}
-
-{\small
-\centering
-\renewcommand*{\arraystretch}{1.1}
-%\rowcolors{7}{lightgray}{}
-\ebresizewidth{
-\begin{tabular}{rl}\toprule
+        \midrule
+	\multicolumn{2}{@{}l}{RMW ops w/ return value} \\
 	C macro  &  Events \\
 	\cmidrule(r){1-1} \cmidrule(l){2-2}
-	\tco{atomic_add_return} & F[mb] ->po R*[once] ->rmw W*[once] ->po F[mb] \\
+	\tco{atomic_add_return} & F[mb] ->po R*[once] ->rmw W*[once] \\
+	                        &               \hspace*{20pt} ->po F[mb] \\
 	\tco{atomic_fetch_add} & \\
 	\tco{atomic_fetch_and} & \\
 	\tco{atomic_xchg} & \\
@@ -127,21 +115,12 @@
 	\tco{atomic_xchg_release} & \\
 	\tco{xchg_release} & \\
 	\tco{atomic_add_negative_release} & \\
-	\bottomrule
-\end{tabular}
-}}
-
-\subsection{Conditional RMW ops}
-
-{\small
-\centering
-\renewcommand*{\arraystretch}{1.1}
-%\rowcolors{7}{lightgray}{}
-\ebresizewidth{
-\begin{tabular}{rl}\toprule
+        \midrule
+	\multicolumn{2}{@{}l}{Conditional RMW ops} \\
 	C macro  &  Events \\
 	\cmidrule(r){1-1} \cmidrule(l){2-2}
-	\tco{atomic_cmpxchg} & On success: F[mb] ->po R*[once] ->rmw W*[once] ->po F[mb] \\
+	\tco{atomic_cmpxchg} & On success: F[mb] ->po R*[once]  \\
+	                     & \hspace*{30pt} ->rmw W*[once] ->po F[mb] \\
 	                     & On failure: R*[once] \\
 	\tco{cmpxchg} & \\
         \tco{atomic_add_unless} & \\
@@ -153,6 +132,5 @@
 	                             & On failure: R*[once] \\
 	\tco{spin_trylock}           & On success: LKR ->po LKW \\
 	                             & On failure: LF \\
-	\bottomrule
-\end{tabular}
-}}
+\end{longtable}
+}
