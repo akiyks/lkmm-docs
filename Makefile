@@ -4,6 +4,7 @@ SED ?= sed
 
 LATEXSOURCES = \
 	lkmm-docs.tex \
+	memory-barriers.tex \
 	docs/*.tex \
 	lkmm-README.tex \
 	rcu/*.tex \
