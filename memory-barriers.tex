@@ -1,13 +1,19 @@
 \chapter{Linux Kermel Memory Barriers}
 
-\section{Authors}
+\begin{Note}
+Pretty-printed version of \path{Documentation/memory-barriers.txt}
+\end{Note}
 
-\begin{itemize}[itemsep=0pt]
+\begin{Note}
+Authors:
+
+\begin{itemize}[nosep]
   \item David Howells <dhowells@redhat.com>
   \item Paul E. McKenney <paulmck@kernel.org>
   \item Will Deacon <will.deacon@arm.com>
   \item Peter Zijlstra <peterz@infradead.org>
 \end{itemize}
+\end{Note}
 
 \section{Disclaimer}
 
@@ -320,8 +326,8 @@ And there are anti-guarantees:
        The portion of the standard containing this guarantee is
        Section 3.14, which defines ``memory location'' as follows:
 
-       \begin{description}
-     	\item [location] \hfill
+       \begin{description}[style=nextline]
+	\item [location]
 		either an object of scalar type, or a maximal sequence
 		of adjacent bit-fields all having nonzero width
 
@@ -387,6 +393,7 @@ Memory barriers come in four basic varieties:
 
 
  \item[Address-dependency barriers (HISTORICAL):]
+     An address-dependency barrier is a weaker form of read barrier.
 
      \begin{Note}
      This item is marked as HISTORICAL\@:
@@ -397,7 +404,6 @@ Memory barriers come in four basic varieties:
      \cref{sec:rcu:Proper care and feeding of return values from rcu_dereference()}.
      \end{Note}
 
-     An address-dependency barrier is a weaker form of read barrier.
      In the case where two loads are performed such that the second depends
      on the result of the first (eg., the first load retrieves the address
      to which the second load will be directed), an address-dependency
