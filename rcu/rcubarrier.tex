@@ -304,10 +304,6 @@ then waits (if needed) for the completion.
 	disables preemption, which acted as an RCU read-side critical
 	section, thus preventing CPU~0's grace period from completing
 	until \co{on_each_cpu()} had dealt with all of the CPUs.
-	However,
-	with the advent of preemptible RCU, \co{rcu_barrier()} no longer
-	waited on nonpreemptible regions of code in preemptible kernels,
-	that being the job of the new \co{rcu_barrier_sched()} function.
 
 	However, with the RCU flavor consolidation around v4.20, this
 	possibility was once again ruled out, because the consolidated
