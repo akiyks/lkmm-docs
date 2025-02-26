@@ -8,6 +8,15 @@
   \qco{or}, \qco{xor}, and \qco{andnot} operations are omitted.
 \end{Note}
 
+\begin{Note}
+  Note that the syntactic representation does not always match the sets and
+  relations in \path{linux-kernel.cat}, due to redefinitions in
+  \path{linux-kernel.bell} and \path{lock.cat}.
+  For example, the \co{po}~link between~\co{LKR} and~\co{LKW} is upgraded
+  to an \co{rmw}~link, and \co{W[acquire]} are not included in the
+  \co{Acquire}~set.
+\end{Note}
+
 \begin{VerbatimU}[tabsize=8]
 # Legend:
 #	R,	a Load event
@@ -85,15 +94,14 @@
 	\multicolumn{2}{@{}l}{RMW ops w/o return value} \\
 	C macro  &  Events \\
 	\cmidrule(r){1-1} \cmidrule(l){2-2}
-\Dark	\tco{atomic_add} & R*[noreturn] ->rmw W*[once] \\
+\Dark	\tco{atomic_add} & R*[noreturn] ->rmw W*[noreturn] \\
 \Dark	\tco{atomic_and} & \\ \Extraspace
 	\tco{spin_lock}  & LKR ->po LKW \\
 	\midrule \Extraspace
 	\multicolumn{2}{@{}l}{RMW ops w/ return value} \\
 	C macro  &  Events \\
 	\cmidrule(r){1-1} \cmidrule(l){2-2}
-\Dark	\tco{atomic_add_return} & F[mb] ->po R*[once] ->rmw W*[once] \\
-\Dark	                        & \multicolumn{1}{r}{->po F[mb]}\\
+\Dark	\tco{atomic_add_return} & R*[mb] ->rmw W*[mb] \\
 \Dark	\tco{atomic_fetch_add} & \\
 \Dark	\tco{atomic_fetch_and} & \\
 \Dark	\tco{atomic_xchg} & \\
@@ -105,13 +113,13 @@
 	\tco{atomic_xchg_relaxed} & \\
 	\tco{xchg_relaxed} & \\
 	\tco{atomic_add_negative_relaxed} & \\ \Extraspace
-\Dark	\tco{atomic_add_return_acquire} & R*[acquire] ->rmw W*[once] \\
+\Dark	\tco{atomic_add_return_acquire} & R*[acquire] ->rmw W*[acquire] \\
 \Dark	\tco{atomic_fetch_add_acquire} & \\
 \Dark	\tco{atomic_fetch_and_acquire} & \\
 \Dark	\tco{atomic_xchg_acquire} & \\
 \Dark	\tco{xchg_acquire} & \\
 \Dark	\tco{atomic_add_negative_acquire} & \\ \Extraspace
-	\tco{atomic_add_return_release} & R*[once] ->rmw W*[release] \\
+	\tco{atomic_add_return_release} & R*[release] ->rmw W*[release] \\
 	\tco{atomic_fetch_add_release} & \\
 	\tco{atomic_fetch_and_release} & \\
 	\tco{atomic_xchg_release} & \\
@@ -121,17 +129,16 @@
 	\multicolumn{2}{@{}l}{Conditional RMW ops} \\
 	C macro  &  Events \\
 	\cmidrule(r){1-1} \cmidrule(l){2-2}
-\Dark	\tco{atomic_cmpxchg} & On success: F[mb] ->po R*[once]  \\
-\Dark	                     & \multicolumn{1}{r}{->rmw W*[once] ->po F[mb]} \\
-\Dark                        & On failure: R*[once] \\
+\Dark	\tco{atomic_cmpxchg} & On success: R*[mb] ->rmw W*[mb]  \\
+\Dark                        & On failure: R*[mb] \\
 \Dark	\tco{cmpxchg} & \\
 \Dark   \tco{atomic_add_unless} & \\ \Extraspace
 	\tco{atomic_cmpxchg_relaxed} & On success: R*[once] ->rmw W*[once] \\
 	                             & On failure: R*[once] \\ \Extraspace
-\Dark	\tco{atomic_cmpxchg_acquire} & On success: R*[acquire] ->rmw W*[once] \\
-\Dark	                             & On failure: R*[once] \\ \Extraspace
-	\tco{atomic_cmpxchg_release} & On success: R*[once] ->rmw W*[release] \\
-	                             & On failure: R*[once] \\ \Extraspace
+\Dark	\tco{atomic_cmpxchg_acquire} & On success: R*[acquire] ->rmw W*[acquire] \\
+\Dark	                             & On failure: R*[acquire] \\ \Extraspace
+	\tco{atomic_cmpxchg_release} & On success: R*[release] ->rmw W*[release] \\
+	                             & On failure: R*[release] \\ \Extraspace
 \Dark	\tco{spin_trylock}           & On success: LKR ->po LKW \\
 \Dark	                             & On failure: LF \\
 \end{longtable}
