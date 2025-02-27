@@ -59,7 +59,7 @@ See the ``Linux Kernel Device Drivers'' book or the
 \url{https://lwn.net/Articles/698014/} article for more information.
 
 
-\subsection{Full memory barriers}
+\subsubsection{Full memory barriers}
 
 The Linux-kernel primitives that provide full ordering include:
 
@@ -141,7 +141,7 @@ full-memory-barrier semantics.
 Just please carefully comment this, otherwise your future self will hate you.
 
 
-\subsection{RMW ordering augmentation barriers}
+\subsubsection{RMW ordering augmentation barriers}
 
 As noted in the previous section, non-value-returning RMW operations
 such as \co{atomic_inc()} and \co{atomic_dec()} guarantee no ordering whatsoever.
@@ -195,7 +195,7 @@ The reason is that the ordering of this intervening code will differ from
 one CPU architecture to another.
 
 
-\subsection{Write memory barrier}
+\subsubsection{Write memory barrier}
 
 The Linux kernel's write memory barrier is \co{smp_wmb()}.
 If a CPU executes the following code:
@@ -230,7 +230,7 @@ the Linux kernel carry out this sort of transformation, both now and in
 the future.
 
 
-\subsection{Read memory barrier}
+\subsubsection{Read memory barrier}
 
 The Linux kernel's read memory barrier is \co{smp_rmb()}.
 If a CPU executes the following code:
@@ -246,7 +246,7 @@ from~\qco{x}.
 However, you are usually better off using an acquire load, as described
 in the ``Acquire Operations'' section below.
 
-\subsection{Compiler barrier}
+\subsubsection{Compiler barrier}
 
 The Linux kernel's compiler barrier is \co{barrier()}.
 This primitive prohibits compiler code-motion optimizations that might
@@ -290,7 +290,7 @@ The Linux kernel provides a wide variety of ordered memory accesses:
 Each of the above categories has its own section below.
 
 
-\subsection{Release operations}
+\subsubsection{Release operations}
 
 Release operations include \co{smp_store_release()}, \co{atomic_set_release()},
 \co{rcu_assign_pointer()}, and value-returning RMW operations whose names
