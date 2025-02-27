@@ -326,7 +326,7 @@ would be needed instead:
 
 But \co{smp_mb()} often incurs much higher overhead than does
 \co{smp_store_release()}, which still provides the needed ordering of~\qco{x}
-against=\qco{y}.
+against~\qco{y}.
 On x86, the version using \co{smp_store_release()} might compile
 to a simple load instruction followed by a simple store instruction.
 In contrast, the \co{smp_mb()} compiles to an expensive instruction that
