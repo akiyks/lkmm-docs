@@ -46,17 +46,30 @@ memory model maintainers.
 
 \subsection{\tco{klitmus7} Compatibility Table}
 
-\begin{VerbatimU}
-	============  ==========
-	target Linux  herdtools7
-	------------  ----------
-	     -- 4.14  7.48 --
-	4.15 -- 4.19  7.49 --
-	4.20 -- 5.5   7.54 --
-	5.6  -- 5.16  7.56 --
-	5.17 --       7.56.1 --
-	============  ==========
-\end{VerbatimU}
+%	============  ==========
+%	target Linux  herdtools7
+%	------------  ----------
+%	     -- 4.14  7.48 --
+%	4.15 -- 4.19  7.49 --
+%	4.20 -- 5.5   7.54 --
+%	5.6  -- 5.16  7.56 --
+%	5.17 --       7.56.1 --
+%	============  ==========
+
+\begin{quote}
+\centering\small
+\begin{tabular}{@{}l@{ -- }ll@{ -- }l@{}}
+  \toprule
+  \multicolumn{2}{@{}c}{target Linux} & \multicolumn{2}{c@{}}{herdtools7} \\
+  \cmidrule(r){1-2} \cmidrule(l){3-4}
+        & 4.14 & 7.48   & \\
+  4.15  & 4.19 & 7.49   & \\
+  4.20  & 5.5  & 7.54   & \\
+  5.6   & 5.16 & 7.56   & \\
+  5.17  &      & 7.56.1 & \\
+  \bottomrule
+\end{tabular}
+\end{quote}
 
 \section{Basic usage: \tco{herd7}}
 
