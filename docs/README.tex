@@ -38,9 +38,13 @@ might help you.
 	\hyperref[sec:docs:Linux-kernel memory model litmus tests]{
 	  \path{litmus-tests.txt}}
 
-  \item You would like to access lock-protected shared variables without
-	having their corresponding locks held:
+  \item You need to locklessly access shared variables that are otherwise
+	protected by a lock:
 	\hyperref[sec:docs:Locking]{\path{locking.txt}}
+
+	This \path{locking.txt} file expands on
+	\cref{sec:docs:recipes:Locking}
+	in \path{recipes.txt}, but it is self-contained.
 
   \item You are familiar with Linux-kernel concurrency, and would
 	like a detailed intuitive understanding of LKMM, including
