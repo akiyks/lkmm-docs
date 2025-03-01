@@ -1102,9 +1102,14 @@ Limitations of the Linux-kernel memory model (LKMM) include:
 	Of course, the use of \co{READ_ONCE()} and \co{WRITE_ONCE()} limits
 	the compiler's ability to optimize, but under some circumstances it
 	is possible for the compiler to undermine the memory model.
-	For more information, see \path{Documentation/explanation.txt}
-	(in particular, the ``THE PROGRAM ORDER RELATION: po AND po-loc''
-	and ``A WARNING'' sections).
+	For more information, see
+	\hyperref[sec:docs:explanation]{
+	  \path{Documentation/explanation.txt}}
+	(in particular, the
+        ``\hyperref[sec:docs:explanation:The program order relation: po and po-loc]{
+          The program order relation: \texttt{po} AND \texttt{po-loc}}''
+	and
+	``\hyperref[sec:docs:explanation:A warning]{A warning}'' sections).
 
 	Note that this limitation in turn limits LKMM's ability to
 	accurately model address, control, and data dependencies.
