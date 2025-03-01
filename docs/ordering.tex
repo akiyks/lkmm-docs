@@ -123,11 +123,13 @@ while examples of the latter include \co{atomic_cmpxchg_relaxed()} and
 \co{atomic_xchg_relaxed()}.
 Similarly, value-returning non-RMW atomic operations such as
 \co{atomic_read()} do not guarantee full ordering, and are covered in
-the later section on unordered operations.
+the later section on
+\hyperref[sec:docs:ordering:Unordered accesses]{unordered operations}.
 
 Value-returning RMW atomic operations whose names end in \co{_acquire} or
-\co{_release} provide limited ordering, and will be described later in this
-document.
+\co{_release} provide limited ordering, and will be described
+\hyperref[sec:docs:ordering:Ordered memory accesses]{later}
+in this document.
 
 Finally, RCU's grace-period primitives provide full ordering.
 These primitives include \co{synchronize_rcu()}, \co{synchronize_rcu_expedited()},
@@ -212,7 +214,9 @@ If a CPU executes the following code:
 
 Then any given CPU will see the write to~\qco{x} has having happened before
 the write to~\qco{y}.  However, you are usually better off using a release
-store, as described in the ``Release Operations'' section below.
+store, as described in the
+``\hyperref[sec:docs:ordering:Release operations]{Release operations}''
+section below.
 
 Note that \co{smp_wmb()} might fail to provide ordering for unmarked C-language
 stores because profile-driven optimization could determine that the
@@ -248,7 +252,9 @@ If a CPU executes the following code:
 Then any given CPU will see the read from~\qco{y} as having preceded the read
 from~\qco{x}.
 However, you are usually better off using an acquire load, as described
-in the ``Acquire Operations'' section below.
+in the
+``\hyperref[sec:docs:ordering:Acquire operations]{Acquire operations}''
+section below.
 
 \subsubsection{Compiler barrier}
 
@@ -278,6 +284,7 @@ equivalent in their implementations.
 
 
 \subsection{Ordered memory accesses}
+\label{sec:docs:ordering:Ordered memory accesses}
 
 The Linux kernel provides a wide variety of ordered memory accesses:
 
@@ -295,6 +302,7 @@ Each of the above categories has its own section below.
 
 
 \subsubsection{Release operations}
+\label{sec:docs:ordering:Release operations}
 
 Release operations include \co{smp_store_release()}, \co{atomic_set_release()},
 \co{rcu_assign_pointer()}, and value-returning RMW operations whose names
@@ -364,6 +372,7 @@ operations, which are the subject of the next section.
 
 
 \subsubsection{Acquire operations}
+\label{sec:docs:ordering:Acquire operations}
 
 Acquire operations include \co{smp_load_acquire()}, \co{atomic_read_acquire()},
 and value-returning RMW operations whose names end in \co{_acquire}.
@@ -498,6 +507,7 @@ Please see the \path{control-dependencies.txt} file for more information.
 
 
 \subsection{Unordered accesses}
+\label{sec:docs:ordering:Unordered accesses}
 
 Each of these two categories of unordered accesses has a section below:
 
