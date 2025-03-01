@@ -148,6 +148,7 @@ Just please carefully comment this, otherwise your future self will hate you.
 
 
 \subsubsection{RMW ordering augmentation barriers}
+\label{sec:docs:ordering:RMW ordering augmentation barriers}
 
 As noted in the previous section, non-value-returning RMW operations
 such as \co{atomic_inc()} and \co{atomic_dec()} guarantee no ordering whatsoever.
@@ -564,7 +565,10 @@ These operations come in three categories:
 
 	This category of operations can be efficiently ordered using
 	\co{smp_mb__before_atomic()} and \co{smp_mb__after_atomic()}, as was
-	discussed in the ``RMW Ordering Augmentation Barriers'' section.
+	discussed in the
+	``\hyperref[sec:docs:ordering:RMW ordering augmentation barriers]
+	  {RMW ordering augmentation barriers}''
+	section.
 \end{itemize}
 
 In short, these operations can be freely reordered unless they are all
