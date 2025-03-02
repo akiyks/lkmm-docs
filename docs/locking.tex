@@ -246,7 +246,9 @@ value of \co{z} is~2, and the final value of \co{r1} is~0.
 \subsection{No roach-motel locking!}
 
 This example requires familiarity with the \co{herd7} \qco{filter} clause, so
-please read up on that topic in \path{litmus-tests.txt}.
+please read up on that
+\hyperref[sec:docs:litmus-tests:Spin loops]{topic}
+in \path{litmus-tests.txt}.
 
 It is tempting to allow memory-reference instructions to be pulled
 into a critical section, but this cannot be allowed in the general case.
@@ -289,7 +291,7 @@ equal~\qco{0} and \qco{1:r1} to equal~\qco{1}.
 
 Then the \qco{exists} clause checks to see if \co{CPU1()} acquired its lock
 first, which should not happen given the \co{filter} clause because \co{CPU0()}
-updates \qco{x} while holding the lock.
+updates~\qco{x} while holding the lock.
 And \co{herd7} confirms this.
 
 But suppose that the compiler was permitted to reorder the spin loop
