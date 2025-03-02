@@ -74,7 +74,7 @@ So don't leave out either the \co{READ_ONCE()} or the \co{WRITE_ONCE()}.
 In particular, although \co{READ_ONCE()} does force the compiler to emit a
 load, it does \emph{not} force the compiler to actually use the loaded value.
 
-It is tempting to try use control dependencies to enforce ordering on
+It is tempting to try to use control dependencies to enforce ordering on
 identical stores on both branches of the \qco{if} statement as follows:
 
 \begin{VerbatimU}
