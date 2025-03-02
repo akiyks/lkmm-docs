@@ -261,8 +261,8 @@ subsequent accesses.
 Therefore, if the final value of \co{r0} is the value~1, the final value
 of \co{r1} must also be the value~1.
 
-The \co{init_stack_slab()} function in \path{lib/stackdepot.c} uses
-release-acquire in this way to safely initialize of a slab of the stack.
+The \co{init_stack_slab()} function in \path{lib/stackdepot.c} (as of v5.7)
+uses release-acquire in this way to safely initialize of a slab of the stack.
 Working out the mutual-exclusion design is left as an exercise for the reader.
 
 
