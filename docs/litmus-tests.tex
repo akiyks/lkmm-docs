@@ -1191,10 +1191,12 @@ Limitations of the Linux-kernel memory model (LKMM) include:
 		using \co{atomic_cmpxchg()}.
 
 		One exception of this limitation is \co{atomic_add_unless()},
-		which is provided directly by \co{herd7} (so no corresponding
-		definition in \path{linux-kernel.def}).
-		\co{atomic_add_unless()} is modeled by \co{herd7} therefore
-		it can be used in litmus tests.
+		which is defined in \path{linux-kernel.def}.
+
+		It has actually been provided directly by \co{herd7} and
+		pre-6.15 LKMM had no corresponding definition.
+		\co{herd7} 7.58 and later permit LKMM's definition to
+		supersede the legacy definition.
 
 	\item	The \co{call_rcu()} function is not modeled.
 		As was shown above, it can be emulated in litmus tests by
