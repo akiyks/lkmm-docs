@@ -22,22 +22,28 @@ This discussion builds on an earlier LWN article\footnote{
 
 The Linux kernel provides the following access-marking options:
 
-\begin{enumerate}
+\begin{enumerate}[1:\@]
 \item	Plain C-language accesses (unmarked), for example, \qco{a = b;}.
+	\label{enum:marking:plain}
 
 \item	Data-race marking, for example, \qtco{data_race(a = b);}.
+	\label{enum:marking:data_race}
 
 \item	\co{READ_ONCE()}, for example, \qtco{a = READ_ONCE(b);}.
 	The various forms of \tco{atomic_read()} also fit in here.
+        \label{enum:marking:READ_ONCE}
 
 \item	\co{WRITE_ONCE()}, for example, \qtco{WRITE_ONCE(a, b);}.
 	The various forms of \co{atomic_set()} also fit in here.
+        \label{enum:marking:WRITE_ONCE}
 
 \item	\co{__data_racy}, for example \qtco{int __data_racy a;}.
 
 \item	KCSAN's negative-marking assertions, \co{ASSERT_EXCLUSIVE_ACCESS()}
 	and \co{ASSERT_EXCLUSIVE_WRITER()}, are described in the
-	"ACCESS-DOCUMENTATION OPTIONS" section below.
+	``\hyperref[sec:docs:access-marking:Access-documentation options]{
+	  Access-documentation options}''
+	section below.
 \end{enumerate}
 
 These may be used in combination, as shown in this admittedly improbable
@@ -47,19 +53,23 @@ example:
 	WRITE_ONCE(a, b + data_race(c + d) + READ_ONCE(e));
 \end{VerbatimU}
 
-Neither plain C-language accesses nor \co{data_race()} (1.\@ and 2.\@ above) place
+Neither plain C-language accesses nor \co{data_race()}
+(\ref{enum:marking:plain} and \ref{enum:marking:data_race} above) place
 any sort of constraint on the compiler's choice of optimizations.\footnote{
 ``Who's afraid of a big bad optimizing compiler?'' at
 \url{https://lwn.net/Articles/793253/}
 }
 
-In contrast, \co{READ_ONCE()} and \co{WRITE_ONCE()} (3.\@ and 4.\@ above) restrict the
+In contrast, \co{READ_ONCE()} and \co{WRITE_ONCE()}
+(\ref{enum:marking:READ_ONCE} and \ref{enum:marking:WRITE_ONCE}
+above) restrict the
 compiler's use of code-motion and common-subexpression optimizations.
 Therefore, if a given access is involved in an intentional data race,
 using \co{READ_ONCE()} for loads and \co{WRITE_ONCE()} for stores is usually
 preferable to \co{data_race()}, which in turn is usually preferable to plain
 C-language accesses.
-It is permissible to combine 2.\@ and 3.\@ for example,
+It is permissible to combine
+\ref{enum:marking:data_race} and \ref{enum:marking:READ_ONCE}, for example,
 \co{data_race(READ_ONCE(a))}, which will both restrict compiler optimizations
 and disable KCSAN diagnostics.
 
@@ -260,6 +270,7 @@ For example:
 \end{VerbatimU}
 
 \subsection{Access-documentation options}
+\label{sec:docs:access-marking:Access-documentation options}
 
 It is important to comment marked accesses so that people reading your
 code, yourself included, are reminded of the synchronization design.
