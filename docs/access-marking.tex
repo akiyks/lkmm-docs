@@ -111,7 +111,7 @@ Approximate diagnostics include lockdep reports, monitoring/statistics
 checks whose return values are ignored, and other situations where reads
 from shared variables are not an integral part of the core concurrency design.
 
-In fact, use of \co{data_race()} instead \co{READ_ONCE()} for these diagnostic
+In fact, use of \co{data_race()} instead of \co{READ_ONCE()} for these diagnostic
 reads can enable better checking of the remaining accesses implementing
 the core concurrency design.
 For example, suppose that the core design prevents any non-diagnostic
