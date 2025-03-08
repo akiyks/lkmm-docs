@@ -236,7 +236,7 @@ used instead of \co{READ_ONCE()}, \co{WRITE_ONCE()}, and \co{data_race()}:
 
 	\item	When the store writes the value already contained in
 		that variable.
-		You can override this default by buildingw ith
+		You can override this default by building with
 		\co{CONFIG_KCSAN_REPORT_VALUE_CHANGE_ONLY=n}.
 
 	\item	When one of the stores is in an interrupt handler and
