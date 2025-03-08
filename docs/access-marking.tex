@@ -403,7 +403,7 @@ The code might look as follows:
 		WRITE_ONCE(foo, newval);
 		ASSERT_EXCLUSIVE_WRITER(foo);
 		do_something(newval);
-		spin_unlock(&foo_wlock);
+		spin_unlock(&foo_lock);
 	}
 
 	int read_foo(void)
