@@ -341,7 +341,7 @@ diagnostic purposes.  The code might look as follows:
 \end{VerbatimU}
 
 The reader-writer lock prevents the compiler from introducing concurrency
-bugs into any part of the main algorithm using foo, which means that
+bugs into any part of the main algorithm using \co{foo}, which means that
 the accesses to \co{foo} within both \co{update_foo()} and \co{read_foo()}
 can (and should) be plain C-language accesses.
 One benefit of making them be plain C-language accesses is that KCSAN can
