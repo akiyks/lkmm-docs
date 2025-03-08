@@ -496,7 +496,7 @@ prevents \co{begin_global()} from completing.
 It is therefore safe to invoke \co{do_something()}.
 
 Otherwise, if either value read from \co{global_flag} is \co{true}, then after
-\co{global_lock} is acquired \co{global_flag} must be false.
+\co{global_lock} is acquired \co{global_flag} must be \co{false}.
 The acquisition of \co{->f_lock} will prevent any call to \co{begin_global()}
 from returning, which means that it is safe to release \co{global_lock}
 and invoke \co{do_something()}.
