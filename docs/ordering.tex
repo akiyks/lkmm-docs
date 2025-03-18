@@ -263,7 +263,7 @@ The Linux kernel's compiler barrier is \co{barrier()}.
 This primitive prohibits compiler code-motion optimizations that might
 move memory references across the point in the code containing the
 \co{barrier()}, but does not constrain hardware memory ordering.
-For example, this can be used to prevent to compiler from moving code
+For example, this can be used to prevent the compiler from moving code
 across an infinite loop:
 
 \begin{VerbatimU}
@@ -326,7 +326,7 @@ The variable stored to by the \co{smp_store_release()}, in this case~\qco{y},
 will normally be used in an acquire operation in other parts of the
 concurrent algorithm.
 
-To see the performance advantages, suppose that the above example read
+To see the performance advantages, suppose that the above example reads
 from~\qco{x} instead of writing to it.
 Then an \co{smp_wmb()} could not guarantee ordering, and an \co{smp_mb()}
 would be needed instead:
@@ -463,18 +463,18 @@ the \co{rcu_dereference()} or \co{srcu_dereference()} to that subsequent
 memory access.
 
 A call to \co{rcu_dereference()} for a given RCU-protected pointer is
-usually paired with a call to a call to \co{rcu_assign_pointer()} for that
-same pointer in much the same way that a call to \co{smp_load_acquire()} is
-paired with a call to \co{smp_store_release()}.
-Calls to \co{rcu_dereference()} and \co{rcu_assign_pointer} are often
+usually paired with a call to \co{rcu_assign_pointer()} for that same pointer
+in much the same way that a call to \co{smp_load_acquire()} is paired with
+a call to \co{smp_store_release()}.
+Calls to \co{rcu_dereference()} and \co{rcu_assign_pointer()} are often
 buried in other APIs, for example, the RCU list API members defined in
 \path{include/linux/rculist.h}.
 For more information, please see the docbook headers in that file, the most
-recent LWN article on the RCU API (\url{https://lwn.net/Articles/777036/}),
+recent LWN article on the RCU API (\url{https://lwn.net/Articles/988638/}),
 and of course the material in \path{Documentation/RCU}.
 
 If the pointer value is manipulated between the \co{rcu_dereference()}
-that returned it and a later \co{dereference()}, please read
+that returned it and a later \co{rcu_dereference()}, please read
 \cref{sec:rcu:Proper care and feeding of return values from rcu_dereference()}.
 It can also be quite helpful to review uses in the Linux kernel.
 
@@ -533,7 +533,7 @@ These operations come in three categories:
 
 \begin{itemize}
  \item	Marked writes, such as \co{WRITE_ONCE()} and \co{atomic_set()}.
-	These primitives required the compiler to emit the corresponding store
+	These primitives require the compiler to emit the corresponding store
 	instructions in the expected execution order, thus suppressing
 	a number of destructive optimizations.
 	However, they provide no hardware ordering guarantees, and in
@@ -542,7 +542,7 @@ These operations come in three categories:
 	to the same variable.
 
  \item	Marked reads, such as \co{READ_ONCE()} and \co{atomic_read()}.
-	These primitives required the compiler to emit the corresponding load
+	These primitives require the compiler to emit the corresponding load
 	instructions in the expected execution order, thus suppressing
 	a number of destructive optimizations.
 	However, they provide no hardware ordering guarantees, and in
@@ -592,7 +592,7 @@ value and the new value.
 Unmarked C-language accesses are unordered, and are also subject to
 any number of compiler optimizations, many of which can break your
 concurrent code.
-It is possible to used unmarked C-language accesses for shared variables
+It is possible to use unmarked C-language accesses for shared variables
 that are subject to concurrent access, but great care is required on
 an ongoing basis.
 The compiler-constraining \co{barrier()} primitive can be helpful, as
