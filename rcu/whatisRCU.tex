@@ -1142,6 +1142,18 @@ initialized after each and every call to \co{kmem_cache_alloc()}, which renders
 reference-free spinlock acquisition completely unsafe.
 Therefore, when
 using \qtco{SLAB_TYPESAFE_BY_RCU}, make proper use of a reference counter.
+If using \co{refcount_t}, the specialized \co{refcount_\{add|inc\}_not_zero_acquire()}
+and \co{refcount_set_release()} APIs should be used to ensure correct operation
+ordering when verifying object identity and when initializing newly
+allocated objects.
+Acquire fence in \co{refcount_\{add|inc\}_not_zero_acquire()}
+ensures that identity checks happen \emph{after} reference count is taken.
+\co{refcount_set_release()} should be called after a newly allocated object is
+fully initialized and release fence ensures that new values are visible
+\emph{before} refcount can be successfully taken by other users.
+Once
+\co{refcount_set_release()} is called, the object should be considered visible
+by other tasks.
 (Those willing to initialize their locks in a \co{kmem_cache} constructor
 may also use locking, including cache-friendly sequence locking.)
 
