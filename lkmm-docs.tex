@@ -173,6 +173,15 @@
 }
 }
 
+% Silence warning of "LaTeX Warning: Command \showhyphens   has changed.",
+% observed with LaTeX2e <2025-06-01> and microtype v3.2.
+% This will be fixed in a later release of microtype.
+\RequirePackage[save]{silence}
+\WarningFilter[showhyphens]{latex}{Command \showhyphens}
+\IfPackageAtLeastTF{microtype}{2025/03/01}{}{
+  \ActivateWarningFilters[showhyphens]
+}
+
 \newcommand{\LstLineNo}{\makebox[5ex][r]{\arabic{VerbboxLineNo}\hspace{2ex}}}
 
 \usepackage{booktabs}
