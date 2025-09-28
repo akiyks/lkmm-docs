@@ -9,6 +9,7 @@ LATEXSOURCES = \
 	lkmm-README.tex \
 	rcu/*.tex \
 	rcu/*/*.tex \
+	rcu/*/*.lst \
 	qqz.sty \
 	pfbook.cls \
 	pfhyphex.tex \

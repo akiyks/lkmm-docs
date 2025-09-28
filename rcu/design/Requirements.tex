@@ -2266,6 +2266,18 @@ This avoids race conditions
 between RCU's hotplug notifier hooks, the grace period initialization
 code, and the FQS loop, all of which refer to or modify this bookkeeping.
 
+Note that grace period initialization (\co{rcu_gp_init()}) must
+carefully sequence CPU hotplug scanning with grace period state changes.
+For example, the following race could occur in \co{rcu_gp_init()}
+if \co{rcu_seq_start()} were to happen after the CPU hotplug scanning.
+
+\begin{tcolorbox}
+\ebresizeverb{.85}{\input{rcu/design/requirements-rcu_gp_init.lst}}
+\end{tcolorbox}
+
+By incrementing \co{gp_seq} first, CPU1's RCU read-side critical section
+is guaranteed to not be missed by CPU2.
+
 
 \subsubsection{Scheduler and RCU}
 
